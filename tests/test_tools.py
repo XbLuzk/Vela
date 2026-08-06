@@ -1,0 +1,186 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import signal
+
+import pytest
+
+from vela.config import load_config
+from vela.tools import ToolRegistry, get_builtin_tools
+from vela.tools.base import ToolContext
+from vela.tools.builtins import save_memory, search_memory
+from vela.tools.commands import CommandExecutor
+from vela.tools.process import stop_subprocess
+
+
+def test_read_write_file_tool(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = load_config(project_root=tmp_path)
+    config.policy.hitl_mode = "never"
+    registry = ToolRegistry()
+    registry.register_all(get_builtin_tools())
+    context = ToolContext(cwd=str(tmp_path), config=config)
+
+    async def run():
+        write = registry.get("write_file")
+        read = registry.get("read_file")
+        assert write and read
+        write_result = await write.execute(
+            {"path": "hello.txt", "content": "hello\nworld\n"},
+            context,
+        )
+        read_result = await read.execute({"path": "hello.txt"}, context)
+        return write_result, read_result
+
+    write_result, read_result = asyncio.run(run())
+    assert not write_result.is_error
+    assert "1: hello" in read_result.content
+    assert "2: world" in read_result.content
+
+
+def test_builtin_tools_include_memory_recall_and_skill_sedimentation():
+    names = {tool.name for tool in get_builtin_tools()}
+
+    assert "search_memory" in names
+    assert "save_skill" in names
+
+
+def test_bash_tool_cancellation_stops_process_group(tmp_path, monkeypatch):
+    config = load_config(project_root=tmp_path)
+    context = ToolContext(cwd=str(tmp_path), config=config)
+    bash = next(tool for tool in get_builtin_tools() if tool.name == "bash")
+    signals = []
+
+    class FakeProcess:
+        pid = 4242
+        returncode = None
+
+        async def communicate(self):
+            await asyncio.Event().wait()
+
+        async def wait(self):
+            self.returncode = -15
+            return self.returncode
+
+    async def create_process(*args, **kwargs):  # noqa: ARG001
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", create_process)
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    async def run():
+        task = asyncio.create_task(bash.execute({"command": "sleep 60"}, context))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert signals
+    assert signals[0][0] == 4242
+
+
+def test_subprocess_stop_escalates_to_sigkill(monkeypatch):
+    signals = []
+
+    class FakeProcess:
+        pid = 4343
+        returncode = None
+
+        def __init__(self):
+            self.waits = 0
+
+        async def wait(self):
+            self.waits += 1
+            if self.waits == 1:
+                raise TimeoutError
+            self.returncode = -9
+            return self.returncode
+
+    process = FakeProcess()
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    asyncio.run(stop_subprocess(process))
+
+    assert signals == [(4343, signal.SIGTERM), (4343, signal.SIGKILL)]
+    assert process.waits == 2
+
+
+def test_subprocess_stop_bounds_wait_after_sigkill(monkeypatch):
+    signals = []
+
+    class FakeProcess:
+        pid = 4344
+        returncode = None
+
+        def __init__(self):
+            self.waits = 0
+
+        async def wait(self):
+            self.waits += 1
+            raise TimeoutError
+
+    process = FakeProcess()
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    asyncio.run(stop_subprocess(process))
+
+    assert signals == [(4344, signal.SIGTERM), (4344, signal.SIGKILL)]
+    assert process.waits == 2
+
+
+def test_command_executor_cancellation_stops_process_group(tmp_path, monkeypatch):
+    signals = []
+
+    class FakeProcess:
+        pid = 4444
+        returncode = None
+
+        async def communicate(self):
+            await asyncio.Event().wait()
+
+        async def wait(self):
+            self.returncode = -15
+            return self.returncode
+
+    async def create_process(*args, **kwargs):  # noqa: ARG001
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", create_process)
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    async def run():
+        task = asyncio.create_task(CommandExecutor().execute("sleep 60", cwd=str(tmp_path)))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert signals == [(4444, signal.SIGTERM)]
+
+
+def test_memory_tools_save_metadata_and_recall_relevant_items(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = load_config(project_root=tmp_path)
+    context = ToolContext(cwd=str(tmp_path), config=config)
+
+    saved = asyncio.run(
+        save_memory(
+            {
+                "content": "用户偏好用 uv 执行 Python 测试",
+                "kind": "preference",
+                "importance": 0.9,
+            },
+            context,
+        )
+    )
+    recalled = asyncio.run(search_memory({"query": "怎么执行测试"}, context))
+
+    assert not saved.is_error
+    assert not recalled.is_error
+    assert "uv" in recalled.content
+    assert "preference" in recalled.content
