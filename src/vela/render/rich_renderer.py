@@ -84,7 +84,7 @@ class RichRenderer:
         provider: str,
         cwd: str,
         tools: int,
-        version: str = "0.1.0",
+        version: str = "0.1.1",
         api_key_configured: bool = False,
         mcp_servers: int = 0,
         skills: int = 0,

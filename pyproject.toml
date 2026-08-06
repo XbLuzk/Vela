@@ -1,6 +1,6 @@
 [project]
 name = "vela-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Vela terminal AI agent with LangGraph planning, ReAct tools, MCP, memory, and multimodal input"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -40,8 +40,8 @@ packages = ["src/vela"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+  "/CONTRIBUTING.md",
   "/LICENSE",
-  "/PAI.md",
   "/README.md",
   "/docs",
   "/pyproject.toml",

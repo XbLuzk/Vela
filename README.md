@@ -486,7 +486,9 @@ Vela 不内置依赖私人账号、扫码登录和私有协议凭证的微信 iL
 
 ## 来源与许可
 
-Vela 是基于 PaiCLI-Python 的开源二次开发，保留原始 Git 历史和 MIT 许可证。产品界面、命令、Python 包、配置目录和环境变量均使用 Vela 命名，不提供旧运行时命名的兼容入口。
+Vela 基于 MIT 许可的软件 PaiCLI-Python 进行开发，并保留其许可证要求的版权和许可声明。产品界面、命令、Python 包、配置目录和环境变量均使用 Vela 命名，不提供旧运行时命名的兼容入口。
+
+欢迎参与开发，环境准备、验证命令和 Pull Request 要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## License
 
