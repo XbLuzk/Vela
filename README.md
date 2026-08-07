@@ -5,6 +5,14 @@
 </p>
 
 <p align="center">
+  <a href="https://www.python.org/downloads/"><img alt="Python 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
+  <a href="https://github.com/XbLuzk/Vela/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/XbLuzk/Vela?style=flat-square&amp;logo=github"></a>
+  <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/XbLuzk/Vela?style=flat-square"></a>
+  <a href="https://docs.langchain.com/oss/python/langgraph/overview"><img alt="LangGraph 1.2+" src="https://img.shields.io/badge/LangGraph-1.2%2B-1C3C3C?style=flat-square"></a>
+  <a href="https://modelcontextprotocol.io/docs/getting-started/intro"><img alt="MCP compatible" src="https://img.shields.io/badge/MCP-compatible-7C3AED?style=flat-square"></a>
+</p>
+
+<p align="center">
   ReAct · LangGraph Plan · Multi-Agent · MCP · Skills · Memory · Multimodal
 </p>
 
