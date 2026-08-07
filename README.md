@@ -1,80 +1,83 @@
-# Vela
+<h1 align="center">Vela</h1>
 
-Vela 是一个运行在终端里的 AI Agent，面向真实项目开发场景：读写文件、搜索代码、执行命令、联网检索、调用 MCP 工具、保存记忆、生成快照、恢复现场，并通过 Runtime API 提供线程、事件和后台任务能力。
+<p align="center">
+  面向真实代码仓库的终端 AI Agent
+</p>
 
-## 功能特性
+<p align="center">
+  ReAct · LangGraph Plan · Multi-Agent · MCP · Skills · Memory · Multimodal
+</p>
 
-- 交互式终端 Agent，基于 Rich 和 prompt-toolkit 渲染
-- 按项目隔离的持久化 CLI Session，支持列表和跨进程恢复
-- 单次 prompt 模式，适合脚本、管道和自动化调用
-- OpenAI-compatible 流式 LLM 客户端，默认面向 DeepSeek 配置
-- 支持 `DEEPSEEK_API_KEY` 等 provider-specific API Key
-- ReAct 工具调用循环，支持 thinking、tool call、tool result、final output 和 usage 事件
-- 统一的交互任务状态与可协作取消，覆盖 ReAct、Plan、Team 和正在执行的 Shell 工具
-- LangGraph Plan-and-Execute 模式，使用 `StateGraph`、`Send`、`Command`、`interrupt()` 和
-  `AsyncSqliteSaver` 实现动态 DAG、并行任务、人工确认和节点级断点恢复
-- 工具级执行日志为有副作用的调用生成稳定幂等键，支持已完成结果重放、未知状态确认重试，
-  以及非追加 `write_file` 的落盘状态对账
-- Multi-Agent 协作模式，包含 Planner、Worker、Reviewer、依赖调度、并行 worker、review
-  重试，以及可切换到独立 Plan-and-Execute 的子 Agent
-- 内置文件、Shell、grep、glob、记忆、网页搜索、网页抓取、代码搜索等工具
-- HITL 人工确认、命令/路径安全策略和 JSONL 审计日志
-- MCP client，支持 stdio 和 Streamable HTTP MCP server
-- Skill 系统，支持内置、用户级和项目级分层、输入 Top-K 匹配、`load_skill` 当前回合懒加载，
-  以及经 HITL 确认的 `save_skill` 流程沉淀
-- Chrome DevTools MCP 配置助手
-- Vela 自身也可以作为 MCP server 暴露内置工具
-- Runtime API，支持有历史的 thread、turn、事件日志，以及带原子抢占、租约恢复、取消保护、
-  项目隔离和 `react|plan|team` 模式的持久化后台任务
-- 静态项目记忆 + SQLite 动态长期记忆，支持元数据、去重、TTL、容量治理和相关性召回
-- 上下文预算与压缩：达到可用输入预算的 80% 后压缩旧轮次，保留近期消息和完整工具调用对
-- 完整 usage、缓存命中/未命中 Token、reasoning Token 和可配置成本估算
-- Agent run 前后自动创建快照，支持恢复现场
-- 支持本地图片和远程图片输入，并根据模型能力自动降级
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#核心能力">核心能力</a> ·
+  <a href="#交互工作流">交互工作流</a> ·
+  <a href="#开发与验证">参与开发</a>
+</p>
 
-## 环境要求
+Vela 是一个运行在终端中的 AI Agent。它能够读取和修改文件、搜索代码、执行命令、调用
+MCP 工具、管理长期记忆，并通过可恢复的 Session、LangGraph Checkpoint 和工具执行日志处理
+长任务与中断恢复。
+
+## 核心能力
+
+| 能力 | 说明 |
+| --- | --- |
+| Agent 运行时 | 支持 ReAct、LangGraph Plan-and-Execute 和 Planner/Worker/Reviewer 多 Agent 协作 |
+| 任务恢复 | 项目级持久化 Session、任务取消、Graph Checkpoint 和工具结果重放 |
+| 工具系统 | 文件、Shell、代码搜索、网页检索、记忆、Skill、MCP 和快照工具 |
+| 安全控制 | HITL 人工确认、路径与命令策略、JSONL 审计日志和会话级权限切换 |
+| 上下文管理 | 静态项目指令、SQLite 长期记忆、相关性召回、Token 预算和上下文压缩 |
+| 多模态输入 | 支持本地图片、远程图片、`@image` 引用和 macOS 剪贴板图片 |
+| 集成方式 | 交互式 CLI、单次 Prompt、Python SDK、MCP Server 和 Runtime API |
+
+## 快速开始
+
+### 环境要求
 
 - Python 3.11 或更新版本
 - [uv](https://docs.astral.sh/uv/)
 - 可选：`rg`，用于更快的本地搜索
-- 可选：Chrome DevTools MCP 需要 Node.js 20.19.0 LTS 或更新版本、npm/npx 和 Chrome
+- 可选：Node.js 20.19.0 LTS、npm/npx 和 Chrome，用于 Chrome DevTools MCP
 
-## 快速开始
+### 安装与启动
 
 ```bash
+git clone https://github.com/XbLuzk/Vela.git
+cd Vela
 uv sync --extra dev
-uv run vela --help
 ```
 
-启动交互模式：
+配置模型 Key 并启动交互模式：
 
 ```bash
+export DEEPSEEK_API_KEY=your_key_here
 uv run vela
+```
+
+恢复当前项目最近一次 Session：
+
+```bash
 uv run vela --resume
 ```
 
-单次查询：
-
-```bash
-uv run vela -p "帮我总结这个项目"
-```
-
-选择运行模式并输出机器可读的 usage/cost：
-
-```bash
-uv run vela --mode plan -p "先读取 README，再验证项目" --json
-uv run vela --mode team --worker-mode plan -p "并行审计核心模块" --json
-```
-
-检查当前环境：
+检查本地依赖、模型和配置：
 
 ```bash
 uv run vela doctor --cwd .
 ```
 
+### 单次任务
+
+```bash
+uv run vela -p "帮我总结这个项目"
+uv run vela --mode plan -p "先读取 README，再验证项目" --json
+uv run vela --mode team --worker-mode plan -p "并行审计核心模块" --json
+```
+
 ## 配置
 
-Vela 的配置优先级如下：
+Vela 按以下顺序合并配置，后面的配置覆盖前面的配置：
 
 1. 内置默认配置
 2. `~/.vela/config.json`
@@ -83,31 +86,20 @@ Vela 的配置优先级如下：
 5. CLI 参数
 6. 当前进程环境变量
 
-可以像 Java 项目一样，把 DeepSeek Key 写到项目 `.env` 里：
+常用环境变量：
 
-```dotenv
-VELA_PROVIDER=deepseek
-VELA_MODEL=deepseek-v4-flash
-DEEPSEEK_API_KEY=your_key_here
-```
+| 环境变量 | 用途 |
+| --- | --- |
+| `VELA_PROVIDER` | 模型供应商 |
+| `VELA_MODEL` | 模型 ID |
+| `VELA_BASE_URL` | OpenAI-compatible API 地址 |
+| `VELA_API_KEY` | Vela 通用模型 Key |
+| `DEEPSEEK_API_KEY` | DeepSeek Key |
+| `ZAI_API_KEY` / `GLM_API_KEY` | GLM Key |
+| `STEP_API_KEY` | Step Key |
+| `KIMI_API_KEY` | Kimi Key |
 
-也可以使用 Vela 通用 Key：
-
-```dotenv
-VELA_PROVIDER=deepseek
-VELA_MODEL=deepseek-v4-flash
-VELA_API_KEY=your_key_here
-```
-
-当前支持的 provider-specific API Key 包括：
-
-- `DEEPSEEK_API_KEY`
-- `ZAI_API_KEY`（GLM 官方推荐）
-- `GLM_API_KEY`
-- `STEP_API_KEY`
-- `KIMI_API_KEY`
-
-通过命令行临时覆盖 provider 和 model：
+临时切换模型：
 
 ```bash
 uv run vela --provider deepseek --model deepseek-v4-flash
@@ -122,9 +114,63 @@ VELA_MODEL=qwen2.5-coder \
 uv run vela -p "解释这个仓库"
 ```
 
-## 交互命令
+## 交互工作流
 
-进入 `uv run vela` 后，可以使用这些 slash commands：
+### Session 与任务取消
+
+普通启动会为当前项目创建新的 Session。Vela 将消息、工具调用和工具结果持久化到
+`~/.vela/sessions/`，不会写入项目目录。
+
+```text
+/sessions
+/resume
+/resume <session-id-or-index>
+/cancel
+```
+
+任务运行期间可以使用 `/cancel`、`Esc` 或 `Ctrl+C` 取消 ReAct、Plan、Team 及正在执行的
+Shell 工具。第一次 `Ctrl+C` 取消当前任务，再按一次才退出 Vela。取消或失败的对话仍会保存，
+之后可以通过 `/resume` 继续。
+
+### Plan-and-Execute
+
+`/plan` 使用 LangGraph 生成并执行任务 DAG。计划生成后需要人工选择：
+
+- `execute`：执行当前计划
+- `modify`：补充要求并重新规划
+- `cancel`：放弃当前计划
+
+```text
+/plan <task>
+/plan --resume
+```
+
+交互式 Checkpoint 保存在 `~/.vela/langgraph/checkpoints.sqlite`。恢复 Session 后执行
+`/plan --resume`，可以从最后一个成功批次继续。
+
+### Multi-Agent
+
+Team 模式由 Planner、Worker 和 Reviewer 组成。Planner 生成带依赖的步骤，Worker 并行执行可运行
+节点，Reviewer 检查结果并触发有限次数的修订。
+
+```text
+/team <task>
+/team --plan <task>
+```
+
+### 模型选择
+
+输入 `/model` 打开交互式模型选择器：
+
+- 使用 `Tab` 或左右方向键切换 `Default` 和 `Custom`
+- 使用上下方向键选择模型
+- 按 `Enter` 切换当前 Agent 的模型
+- 在 `Custom` 中创建或删除 BYOK 模型配置
+
+自定义模型保存在权限为 `0600` 的 `~/.vela/models.json`。
+
+<details>
+<summary><strong>查看全部交互命令</strong></summary>
 
 ```text
 /help
@@ -132,8 +178,7 @@ uv run vela -p "解释这个仓库"
 /clear
 /cancel
 /sessions
-/resume
-/resume <session-id-or-index>
+/resume [session-id-or-index]
 /context
 /memory
 /memory search <query>
@@ -152,8 +197,7 @@ uv run vela -p "解释这个仓库"
 /plan --resume
 /team <task>
 /team --plan <task>
-/model
-/model <model-id>
+/model [model-id]
 /model <provider> <model-id>
 /usage
 /skill
@@ -172,140 +216,103 @@ uv run vela -p "解释这个仓库"
 /restore <snapshot-id-or-index>
 ```
 
-普通启动会创建新的项目 Session；`uv run vela --resume` 会恢复当前项目最近更新的
-Session。交互中用 `/sessions` 查看列表，使用 `/resume` 恢复上一个 Session，或通过
-`/resume <session-id-or-index>` 指定目标。会话消息、工具调用和工具结果保存在权限为
-`0700` 的 `~/.vela/sessions/` 目录中，数据库及临时 sidecar 文件使用 `0600`，不会写入
-项目目录。
+</details>
 
-任务运行期间仍可输入 `/cancel`，也可以按 `Esc` 或 `Ctrl+C` 取消当前 ReAct、Plan、Team
-及其工具调用；第一次 `Ctrl+C` 只取消任务，再按一次才退出 Vela。状态栏会显示
-`planning`、`running`、`cancelling`、`cancelled`、`completed` 或 `failed`。取消或失败的
-对话仍会写入当前 Session，未完成的工具调用会被安全闭合，之后可以通过 `/resume` 继续。
+## 工具与安全
 
-`/plan` 使用 LangGraph 作为唯一执行引擎。生成执行计划后不会立即动手：输入 `execute`
-确认执行，输入 `modify` 后再给出修改要求以重新规划，或输入 `cancel` 放弃本次计划。
-交互式 Graph checkpoint 保存在权限隔离的 `~/.vela/langgraph/checkpoints.sqlite`，
-`thread_id` 与当前 Session id 对齐。任务中断后，先用 `/resume` 切回对应 Session，再输入
-`/plan --resume`，即可从最后一个成功的 Graph 批次继续；已 checkpoint 的任务不会重复执行。
-未显式传入 `thread_id` 的一次性编程调用使用内存 checkpointer，不会积累无法恢复的孤立记录。
-有副作用的工具调用还会写入权限为 `0600` 的 `~/.vela/tool-executions.sqlite`。恢复任务时，
-已经完成的工具直接重放保存的结果，不会再次执行；非追加 `write_file` 会先比较目标文件内容，
-一致则自动对账为完成。只有处于 `uncertain` 且无法对账的调用才会在明确确认后重试。终端的工具
-结果标题会显示 `replayed`、`reconciled` 或 `uncertain`，避免静默恢复；Plan 进入终态后会清理
-对应的恢复记录，长期审计仍由 JSONL audit log 负责。
+Vela 内置的主要工具：
 
-这提供的是工具边界的 effectively-once，而不是所有外部系统上的通用 exactly-once。Shell、未知
-MCP 或不支持幂等键的第三方接口如果恰好在“外部操作成功、日志尚未完成”时中断，确认恢复后仍
-可能重复；这类工具应使用下游幂等键或自身的状态对账能力。
+| 类别 | 工具 |
+| --- | --- |
+| 文件 | `read_file`、`write_file`、`list_dir`、`glob_files` |
+| 搜索 | `grep_code`、`search_code` |
+| 命令 | `execute_command` |
+| 联网 | `web_search`、`web_fetch` |
+| 记忆 | `save_memory`、`search_memory` |
+| Skill | `load_skill`、`save_skill` |
+| 恢复 | `revert_turn`、快照工具 |
 
-`/model` 会打开交互式模型选择器：`Tab` 或左右方向键在 `Default`、`Custom`
-之间切换，上下方向键选择模型，`Enter` 立即切换当前 Agent。`Custom` 中可以选择已保存的
-BYOK 模型、创建新的 DeepSeek/GLM/OpenAI-compatible 配置，或按 `d` 删除配置。自定义配置
-保存在权限为 `0600` 的 `~/.vela/models.json`；建议填写 API Key 环境变量名，只有显式输入
-API Key 时才会把密钥写入该文件。
+写文件、执行命令、远程 MCP 写操作和恢复快照等危险动作会经过 Policy、HITL 和 Audit 处理。
+`save_skill` 同样需要人工确认，模型不会静默改变后续行为。
 
-## 内置工具
+交互模式下按 `Shift+Tab` 切换权限：
 
-Vela 内置了一组 Agent 可以调用的本地工具和联网工具：
+- `Default`：启用 HITL、工作区路径限制和命令安全策略
+- `Auto (full access)`：当前会话不再请求审批，并关闭路径与命令守卫
 
-- `read_file`
-- `write_file`
-- `list_dir`
-- `glob` / `glob_files`
-- `grep` / `grep_code`
-- `bash` / `execute_command`
-- `web_search`
-- `web_fetch`
-- `save_memory`
-- `search_memory`
-- `load_skill`
-- `save_skill`
-- `search_code`
-- `revert_turn`
+再次按 `Shift+Tab` 会恢复启动时的默认策略。
 
-写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作，会经过 policy、HITL 和 audit 处理。
-`save_skill` 也必须经过 HITL；模型可以提议沉淀，但不会静默改变后续行为。
+<details>
+<summary><strong>了解 Plan 恢复与工具执行语义</strong></summary>
 
-交互模式下按 `Shift+Tab` 可在两种会话权限模式间切换：
+有副作用的工具调用会写入权限为 `0600` 的 `~/.vela/tool-executions.sqlite`。恢复任务时，Vela
+直接重放已完成工具的结果；非追加 `write_file` 会先比较目标文件内容，一致时自动对账为完成。
+只有状态为 `uncertain` 且无法对账的调用，才会在用户明确确认后重试。
 
-- `Default`：使用启动时的 HITL、工作区路径和命令安全策略。
-- `Auto (full access)`：当前会话内不再请求审批，并关闭路径与命令守卫；再次按
-  `Shift+Tab` 会恢复启动时的默认策略。
+Vela 在工具边界提供 effectively-once 语义，但不承诺外部系统的 exactly-once。Shell、未知 MCP
+工具或不支持幂等键的第三方接口仍可能在极端中断窗口中产生重复副作用。这些工具应使用下游
+幂等键、唯一约束或自身的状态查询能力。
 
-## Skill 匹配与沉淀
+</details>
 
-Skill 按 `builtin -> user -> project` 加载，同名时后层覆盖前层：
+## Skills、Memory 与上下文
 
-- builtin：产品默认能力
-- user：`~/.vela/skills/*/SKILL.md`，跨项目复用
-- project：`.vela/skills/*/SKILL.md`，最贴近当前仓库并拥有最高优先级
+### Skills
 
-每次用户输入先用 name、description、tags 做中英文词法/字符 n-gram Top-K 匹配，再把候选交给模型决定是否调用 `load_skill`。Skill 正文只在真正加载后进入当前 ReAct 的下一模型轮；每个并发子 Agent 都有独立 Skill 缓冲区，不会串线。
+Skill 按以下顺序加载，同名时后层覆盖前层：
 
-当一次成功流程具备稳定输入、明确步骤和可复用边界时，模型可以调用 `save_skill` 提议写入 project 或 user 层。该工具默认拒绝覆盖已有 Skill，并强制人工确认。
+1. `builtin`：产品默认能力
+2. `user`：`~/.vela/skills/*/SKILL.md`
+3. `project`：`.vela/skills/*/SKILL.md`
 
-## 记忆、动态 Prompt 与上下文压缩
+Vela 先根据名称、描述和标签召回 Top-K 候选，再由模型决定是否调用 `load_skill`。Skill 正文只在
+真正加载后进入当前任务。每个并发子 Agent 使用独立缓冲区，避免上下文串线。
 
-Vela 把记忆分成三层：
+### Memory
 
-- 短期记忆：当前 thread/session 的原始消息、工具调用和工具结果
-- 静态长期记忆：`AGENTS.md`、`PAI.md`、`.vela/PAI.md` 及自定义 prompt 文件；人工维护、可版本控制
-- 动态长期记忆：按项目 scope 隔离的 SQLite 记录；包含 kind、source、importance、confidence、TTL、访问次数和内容哈希
+| 层级 | 内容 |
+| --- | --- |
+| 短期记忆 | 当前 Session 的消息、工具调用和工具结果 |
+| 静态长期记忆 | `AGENTS.md`、`PAI.md`、`.vela/PAI.md` 和自定义 Prompt 文件 |
+| 动态长期记忆 | 按项目隔离的 SQLite 记录，支持去重、TTL、容量治理和相关性召回 |
 
-动态记忆不会再无条件取“最近 8 条”。每个请求会按当前问题自动召回 Top-K，并把结果放进明确标注为 untrusted data 的动态 Prompt；模型觉得候选不足时，还可以调用 `search_memory` 深搜。写入端会拒绝空值/超长值，通过规范化哈希去重，并按项目容量淘汰低价值记录。
+动态记忆按当前问题召回相关 Top-K，模型也可以调用 `search_memory` 深搜。达到输入预算的 80% 时，
+Vela 会压缩旧轮次并保留近期消息和完整的 Tool Call/Result 对。压缩摘要不会自动写入长期记忆。
 
-Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态前缀承载身份、规则和项目指令；动态后缀承载当前时间、cwd、模型、工具以及与当前问题相关的记忆。
+## 图片输入
 
-可用输入预算按 `context_window - max_output_tokens - reserve_tokens` 计算。默认在该预算的 80% 触发压缩，压到 55% 左右，为后续输出、工具结果和无 tokenizer 估算误差留出空间。压缩摘要只属于短期会话，不会自动晋升为长期记忆。
+在 Prompt 中使用 `@image` 引用本地或远程图片：
 
-## 模型、Token 与费用
+```text
+分析这张截图 @image:./screenshots/page.png
+分析这张截图 @image:</Users/me/Desktop/screen shot.png>
+看看这张图片 @image:https://example.com/image.png
+```
 
-默认 provider/model 是 `deepseek/deepseek-v4-flash`。DeepSeek V4 Flash/Pro 的内置 profile 使用 1M 上下文，并带有截至 2026-07-17 的官方每百万 Token 价格；价格会变化，因此可以用 `llm.context_window` 和 `llm.prices` 覆盖，未知 OpenAI-compatible 模型应显式配置。
+macOS 终端还支持：
 
-流式请求开启 `stream_options.include_usage`，并解析 `choices=[]` 的 usage-only 块、cache hit/miss 和 reasoning Token。REPL 用 `/usage` 查看最近一次普通 ReAct，单次 CLI 用 `--json` 获取完整 usage/cost。成本以供应商返回的实际 Token 为准，不能只用“代码行数”精确推算。
+- 在输入框按 `Ctrl+V`，保存剪贴板图片并插入 `@image:<...>`
+- 输入 `@clipboard`，发送时读取当前剪贴板图片
 
-## 联网工具
-
-`web_search` 使用 DuckDuckGo HTML 搜索，返回标题、URL 和摘要。
-
-`web_fetch` 可以抓取公开 HTTP/HTTPS 页面，并做基础正文提取。它会拒绝 `file://`、loopback、私有网络和内网地址，降低 SSRF 风险。
-
-如果需要登录态、浏览器状态或 JS 渲染页面，建议使用 Chrome DevTools MCP。
+图片缓存目录和文件权限分别为 `0700` 和 `0600`。Vela 会自动压缩图片，并在模型不支持多模态时
+降级为文本元信息。
 
 ## MCP
 
-Vela 可以连接 MCP server，并把远端工具动态注册为：
+Vela 可以连接 stdio 或 Streamable HTTP MCP Server，并将远程工具注册为：
 
 ```text
 mcp__<server-name>__<tool-name>
 ```
 
-初始化项目级 Chrome DevTools MCP 配置：
+初始化项目级 Chrome DevTools MCP：
 
 ```bash
 uv run vela mcp init-chrome --scope project
+uv run vela mcp list
 ```
 
-它会写入 `.vela/mcp.json`，内容类似：
-
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "chrome-devtools-mcp@latest",
-        "--no-usage-statistics"
-      ]
-    }
-  }
-}
-```
-
-连接已有 remote-debugging Chrome：
+连接已经开启 remote debugging 的 Chrome：
 
 ```bash
 uv run vela mcp init-chrome \
@@ -313,48 +320,37 @@ uv run vela mcp init-chrome \
   --browser-url http://127.0.0.1:9222
 ```
 
-查看已配置的 MCP server：
-
-```bash
-uv run vela mcp list
-```
-
-把 Vela 自身作为 MCP server 暴露：
+将 Vela 作为 MCP Server 暴露：
 
 ```bash
 uv run vela mcp serve --transport stdio
 uv run vela mcp serve --transport http --port 3000
 ```
 
-HTTP smoke：
-
-```bash
-curl -sS -X POST http://127.0.0.1:3000 \
-  -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-```
-
-Chrome DevTools MCP 会把浏览器页面和 DevTools 状态暴露给 Agent。不要随意把包含个人账号、敏感数据或生产后台的 Chrome 会话授权给 Agent。
+授权 Chrome DevTools MCP 前，请确认浏览器中没有不应暴露给 Agent 的个人账号、敏感数据或生产
+后台页面。
 
 ## Runtime API
 
-Vela 内置轻量 Runtime API，适合外部系统接入线程、turn、事件和后台任务。
+Runtime API 提供持久化 Thread、Turn、事件和后台任务能力。
 
 启动服务：
 
 ```bash
-VELA_RUNTIME_API_KEY=dev-key \
-uv run vela serve --http --port 8080
+VELA_RUNTIME_API_KEY=dev-key uv run vela serve --http --port 8080
 ```
 
-创建线程：
+<details>
+<summary><strong>查看 Runtime API 示例</strong></summary>
+
+创建 Thread：
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/v1/threads \
   -H 'x-api-key: dev-key'
 ```
 
-发送 turn：
+发送 Turn：
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/v1/threads/<thread_id>/turns \
@@ -363,73 +359,44 @@ curl -sS -X POST http://127.0.0.1:8080/v1/threads/<thread_id>/turns \
   -d '{"message":"总结这个项目"}'
 ```
 
-读取事件：
-
-```bash
-curl -sS http://127.0.0.1:8080/v1/threads/<thread_id>/events \
-  -H 'x-api-key: dev-key'
-```
-
-创建并查看后台任务：
+创建后台任务：
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
   -H 'content-type: application/json' \
   -H 'x-api-key: dev-key' \
   -d '{"message":"后台总结这个仓库","mode":"plan"}'
-
-curl -sS http://127.0.0.1:8080/v1/tasks \
-  -H 'x-api-key: dev-key'
 ```
 
-也可以只启动队列消费者，不暴露 HTTP：
+</details>
+
+只启动任务 Worker：
 
 ```bash
 uv run vela worker --workers 2 --cwd .
 ```
 
-任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。
+后台任务按项目目录隔离。Worker 使用 SQLite 原子事务领取任务，并通过 Lease 和 Heartbeat 恢复
+崩溃任务；取消任务后，迟到结果不会覆盖 `cancelled` 状态。
 
-## 图片输入
+## Python SDK
 
-Vela 支持在 prompt 里引用图片：
+```python
+from vela.sdk import create_default_engine
 
-```text
-分析这张截图 @image:./screenshots/page.png
+engine = create_default_engine(cwd=".")
+
+result = engine.ask_complete("解释这个项目")
+plan_result = engine.plan_complete("先读取 README，再总结项目结构")
+team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
+
+print(result.text)
 ```
-
-路径中包含空格时使用尖括号：
-
-```text
-分析这张截图 @image:</Users/me/Desktop/screen shot.png>
-```
-
-也支持绝对路径和远程图片：
-
-```text
-解释这张图 @image:/Users/me/Desktop/diagram.png
-看看这个图片 @image:https://example.com/image.png
-```
-
-在 macOS 终端中，还可以先把截图复制到系统剪贴板，然后：
-
-- 在输入框按 `Ctrl+V`（不是 `Cmd+V`），Vela 会把图片保存到 `~/.vela/cache/`，并插入 `@image:<...>`。
-- 或者在 prompt 中直接输入 `@clipboard`，发送时读取当前剪贴板图片。
-
-`Ctrl+V` 抓图失败时只显示提示，不会清空或提交当前输入。缓存目录权限为 `0700`，图片文件权限为 `0600`。
-
-本地图片会自动压缩、缩放，并在需要时把透明底铺成白底，再转为 data URL。如果当前 provider/model 不支持多模态输入，Vela 会自动降级为文本元信息，不会把不支持的图片 payload 发给模型。
 
 ## 快照
 
-每次 Agent run 都会尽力创建项目快照：
-
-- `pre-turn`
-- `post-turn`
-
-快照保存在 `~/.vela/snapshots/`，不会写入项目 `.git`。
-
-REPL 中可以使用：
+Vela 在每次 Agent Run 前后尽力创建 `pre-turn` 和 `post-turn` 快照。快照保存在
+`~/.vela/snapshots/`，不会写入项目 `.git`。
 
 ```text
 /snapshot
@@ -437,20 +404,7 @@ REPL 中可以使用：
 /snapshot clean
 ```
 
-## SDK
-
-```python
-from vela.sdk import create_default_engine
-
-engine = create_default_engine(cwd=".")
-result = engine.ask_complete("解释这个项目")
-print(result.text)
-
-plan_result = engine.plan_complete("先读取 README，再总结项目结构")
-team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
-```
-
-## 开发
+## 开发与验证
 
 安装开发依赖：
 
@@ -458,16 +412,16 @@ team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
 uv sync --extra dev
 ```
 
-运行检查：
+运行完整检查：
 
 ```bash
-uv run python -m ruff check .
-uv run python -m ruff format --check .
-uv run python -m pytest
+uv run --extra dev ruff check .
+uv run --extra dev ruff format --check .
+uv run --extra dev python -m pytest
 uv build
 ```
 
-常用 smoke：
+运行 CLI Smoke Test：
 
 ```bash
 uv run vela --version
@@ -476,20 +430,12 @@ uv run vela doctor --cwd .
 uv run vela --plain -p hello
 ```
 
-## 实现范围
-
-Vela 覆盖 CLI、REPL、ReAct、Plan-and-Execute、Multi-Agent、Skill、SDK、工具调用、MCP、Runtime API、记忆、快照、联网工具和图片输入。
-
-Vela 不内置依赖私人账号、扫码登录和私有协议凭证的微信 iLink 通道。
-
-更详细的实现对齐情况见 [docs/parity.md](docs/parity.md)。
+贡献流程与 Pull Request 要求见 [贡献指南](CONTRIBUTING.md)。能力范围和实现状态见
+[对齐说明](docs/parity.md)。
 
 ## 来源与许可
 
-Vela 基于 MIT 许可的软件 PaiCLI-Python 进行开发，并保留其许可证要求的版权和许可声明。产品界面、命令、Python 包、配置目录和环境变量均使用 Vela 命名，不提供旧运行时命名的兼容入口。
+Vela 基于 MIT 许可的软件 PaiCLI-Python 进行开发，并保留许可证要求的版权和许可声明。产品界面、
+命令、Python 包、配置目录和环境变量均使用 Vela 命名，不提供旧运行时命名的兼容入口。
 
-欢迎参与开发，环境准备、验证命令和 Pull Request 要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Vela 使用 [MIT License](LICENSE)。
