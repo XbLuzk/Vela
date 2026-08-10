@@ -1,6 +1,6 @@
 [project]
 name = "vela-agent"
-version = "0.2.0"
+version = "0.2.1"
 description = "Vela terminal AI agent with LangGraph planning, ReAct tools, MCP, memory, and multimodal input"
 readme = "README.md"
 requires-python = ">=3.11"
