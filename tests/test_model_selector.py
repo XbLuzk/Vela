@@ -1,111 +1,55 @@
 from __future__ import annotations
 
-import stat
 from types import SimpleNamespace
 
 import pytest
 
 from vela.config import load_config
+from vela.entrypoints.model_command import _profile_from_argument, activate_model
 from vela.entrypoints.model_selector import ModelSelectorState
-from vela.entrypoints.repl import _activate_model
 from vela.llm import create_llm_client
-from vela.llm.model_profiles import (
-    DEFAULT_MODEL_PROFILES,
-    CustomModelStore,
-    ModelProfile,
-)
+from vela.llm.model_profiles import DEFAULT_MODEL_PROFILES
 
 
-def test_selector_tabs_between_default_and_custom_models():
-    custom = ModelProfile.custom_profile(
-        name="My GLM",
-        provider="glm",
-        model="glm-custom",
-        base_url="https://example.com/v1",
-        context_window=128_000,
-    )
+def test_selector_navigates_builtin_models():
     state = ModelSelectorState(
-        defaults=list(DEFAULT_MODEL_PROFILES),
-        custom=[custom],
+        profiles=list(DEFAULT_MODEL_PROFILES),
         current_provider="deepseek",
         current_model="deepseek-v4-flash",
     )
 
-    assert state.tab == "default"
-    assert state.selected_action().profile.model == "deepseek-v4-flash"
-
-    state.switch_tab()
-    assert state.tab == "custom"
-    assert state.selected_action().profile == custom
-
+    assert state.selected_profile().model == "deepseek-v4-flash"
     state.move(1)
-    assert state.selected_action().kind == "add"
-    state.move(1)
-    assert state.selected_action().profile == custom
-    assert state.delete_action().profile == custom
+    assert state.selected_profile().model == "deepseek-v4-pro"
+    state.move(-1)
+    assert state.selected_profile().model == "deepseek-v4-flash"
 
 
-def test_selector_starts_on_active_custom_model():
-    custom = ModelProfile.custom_profile(
-        name="Private gateway",
-        provider="openai-compatible",
-        model="company-model",
-        base_url="https://llm.example.com/v1",
-        context_window=64_000,
-    )
+def test_selector_starts_on_active_model():
     state = ModelSelectorState(
-        defaults=list(DEFAULT_MODEL_PROFILES),
-        custom=[custom],
-        current_provider=custom.provider,
-        current_model=custom.model,
+        profiles=list(DEFAULT_MODEL_PROFILES),
+        current_provider="glm",
+        current_model="glm-5.2",
     )
 
-    assert state.tab == "custom"
+    assert state.selected_profile().model == "glm-5.2"
     plain = "".join(text for _style, text in state.render())
-    assert "Custom (1)" in plain
-    assert "Private gateway ✓" in plain
-    assert "[+] Add custom model" in plain
+    assert "Models (5)" in plain
+    assert "GLM-5.2 ✓" in plain
 
 
-def test_custom_model_store_round_trips_and_uses_private_permissions(tmp_path):
-    path = tmp_path / "models.json"
-    store = CustomModelStore(path)
-    profile = ModelProfile.custom_profile(
-        name="DeepSeek proxy",
-        provider="deepseek",
-        model="deepseek-v4-flash",
-        base_url="https://proxy.example.com/v1",
-        context_window=1_000_000,
-        api_key="secret",
-        api_key_env="DEEPSEEK_API_KEY",
+def test_direct_model_argument_keeps_runtime_provider_switching(tmp_path):
+    config = load_config(project_root=tmp_path, env={})
+
+    profile = _profile_from_argument("GLM glm-custom", config)
+
+    assert profile.provider == "glm"
+    assert profile.model == "glm-custom"
+    assert profile.base_url == "https://open.bigmodel.cn/api/paas/v4"
+    assert (
+        profile.resolve_api_key(env={"VELA_API_KEY": "generic-key", "ZAI_API_KEY": "glm-key"})
+        == "glm-key"
     )
-
-    store.add(profile)
-
-    assert store.list() == [profile]
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert store.delete(profile.id)
-    assert store.list() == []
-    assert not store.delete(profile.id)
-
-
-def test_custom_profile_validates_endpoint_and_context_window():
-    with pytest.raises(ValueError, match="http"):
-        ModelProfile.custom_profile(
-            name="bad",
-            provider="glm",
-            model="glm-5.2",
-            base_url="open.bigmodel.cn",
-            context_window=200_000,
-        )
-    with pytest.raises(ValueError, match="greater than zero"):
-        ModelProfile.custom_profile(
-            name="bad",
-            provider="glm",
-            model="glm-5.2",
-            base_url="https://open.bigmodel.cn",
-            context_window=0,
-        )
 
 
 def test_activate_model_rebuilds_live_client_without_restart(tmp_path, monkeypatch):
@@ -113,13 +57,19 @@ def test_activate_model_rebuilds_live_client_without_restart(tmp_path, monkeypat
     monkeypatch.setenv("ZAI_API_KEY", "glm-secret")
     config = load_config(project_root=tmp_path)
     old_client = create_llm_client(config.llm)
-    agent = SimpleNamespace(llm_client=old_client, system_prompt="old")
     registry = SimpleNamespace(list_names=lambda: ["read_file"])
+    agent = SimpleNamespace(
+        llm_client=old_client,
+        system_prompt="old",
+        config=config,
+        cwd=str(tmp_path),
+        tool_registry=registry,
+    )
     renderer = SimpleNamespace(context_window=None)
     renderer.set_context_window = lambda value: setattr(renderer, "context_window", value)
     profile = next(item for item in DEFAULT_MODEL_PROFILES if item.model == "glm-5.2")
 
-    _activate_model(profile, config, agent, registry, renderer, str(tmp_path))
+    activate_model(profile, agent, renderer)
 
     assert agent.llm_client is not old_client
     assert agent.llm_client.provider_name == "glm"

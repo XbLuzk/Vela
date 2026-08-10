@@ -173,12 +173,11 @@ Team 模式由 Planner、Worker 和 Reviewer 组成。Planner 生成带依赖的
 
 输入 `/model` 打开交互式模型选择器：
 
-- 使用 `Tab` 或左右方向键切换 `Default` 和 `Custom`
 - 使用上下方向键选择模型
 - 按 `Enter` 切换当前 Agent 的模型
-- 在 `Custom` 中创建或删除 BYOK 模型配置
+- 按 `Esc` 返回对话
 
-自定义模型保存在权限为 `0600` 的 `~/.vela/models.json`。
+也可以使用 `/model <provider> <model>` 临时切换到配置文件或环境变量中指定的模型。
 
 <details>
 <summary><strong>查看全部交互命令</strong></summary>

@@ -30,12 +30,6 @@ class AgentRole(StrEnum):
     REVIEWER = "REVIEWER"
 
 
-class AgentMessageType(StrEnum):
-    TASK = "TASK"
-    RESULT = "RESULT"
-    ERROR = "ERROR"
-
-
 class StepStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -49,36 +43,11 @@ class AgentRunMode(StrEnum):
 
 
 @dataclass(slots=True)
-class AgentMessage:
-    from_agent: str
+class SubAgentResult:
     content: str
-    type: AgentMessageType
     usage: Usage = field(default_factory=Usage)
     turns: int = 0
-
-    @classmethod
-    def task(cls, from_agent: str, content: str) -> AgentMessage:
-        return cls(from_agent, content, AgentMessageType.TASK)
-
-    @classmethod
-    def result(
-        cls,
-        from_agent: str,
-        content: str,
-        usage: Usage | None = None,
-        turns: int = 0,
-    ) -> AgentMessage:
-        return cls(from_agent, content, AgentMessageType.RESULT, usage or Usage(), turns)
-
-    @classmethod
-    def error(
-        cls,
-        from_agent: str,
-        content: str,
-        usage: Usage | None = None,
-        turns: int = 0,
-    ) -> AgentMessage:
-        return cls(from_agent, content, AgentMessageType.ERROR, usage or Usage(), turns)
+    failed: bool = False
 
 
 @dataclass(slots=True)
@@ -130,13 +99,13 @@ class SubAgent:
 
     async def execute(
         self,
-        task: AgentMessage,
+        task: str,
         context: str = "",
         *,
         mode: str | None = None,
         plan_depth: int = 0,
-    ) -> AgentMessage:
-        content = f"{context}\n\nCurrent task:\n{task.content}".strip() if context else task.content
+    ) -> SubAgentResult:
+        content = f"{context}\n\nCurrent task:\n{task}".strip() if context else task
         if self.role == AgentRole.WORKER:
             selected_mode = _normalize_worker_mode(mode or self.default_mode)
             if selected_mode == AgentRunMode.PLAN:
@@ -144,19 +113,16 @@ class SubAgent:
             return await self._execute_worker(content)
         return await self._execute_without_tools(content)
 
-    async def review(self, original_task: str, execution_result: str) -> AgentMessage:
+    async def review(self, original_task: str, execution_result: str) -> SubAgentResult:
         return await self.execute(
-            AgentMessage.task(
-                "orchestrator",
-                f"Original task:\n{original_task}\n\nExecution result:\n{execution_result}",
-            )
+            f"Original task:\n{original_task}\n\nExecution result:\n{execution_result}"
         )
 
     def clear_history(self) -> None:
         self.history = []
         self.skill_context_buffer.clear()
 
-    async def _execute_worker(self, content: str) -> AgentMessage:
+    async def _execute_worker(self, content: str) -> SubAgentResult:
         text = ""
         tool_results: list[str] = []
         usage = Usage()
@@ -186,15 +152,15 @@ class SubAgent:
                 elif event.get("type") == "error":
                     raise event["error"]
         except Exception as exc:  # noqa: BLE001
-            return AgentMessage.error(self.name, str(exc), usage, turns)
+            return SubAgentResult(str(exc), usage, turns, failed=True)
         result = text.strip() or "\n".join(item for item in tool_results if item).strip()
-        return AgentMessage.result(self.name, result, usage, turns)
+        return SubAgentResult(result, usage, turns)
 
-    async def _execute_plan(self, content: str, *, plan_depth: int) -> AgentMessage:
+    async def _execute_plan(self, content: str, *, plan_depth: int) -> SubAgentResult:
         if plan_depth >= self.max_plan_depth:
-            return AgentMessage.error(
-                self.name,
+            return SubAgentResult(
                 f"nested Plan depth limit ({self.max_plan_depth}) reached",
+                failed=True,
             )
         from vela.agent.plan_graph import LangGraphPlanAgent
 
@@ -218,14 +184,14 @@ class SubAgent:
                 elif event.get("type") == "error":
                     raise event["error"]
         except Exception as exc:  # noqa: BLE001
-            return AgentMessage.error(self.name, str(exc), usage, turns)
+            return SubAgentResult(str(exc), usage, turns, failed=True)
         self.history = [
             Message(role="user", content=content),
             Message(role="assistant", content=text),
         ]
-        return AgentMessage.result(self.name, text.strip(), usage, turns)
+        return SubAgentResult(text.strip(), usage, turns)
 
-    async def _execute_without_tools(self, content: str) -> AgentMessage:
+    async def _execute_without_tools(self, content: str) -> SubAgentResult:
         text = ""
         usage = Usage()
         messages = [*self.history, Message(role="user", content=content)]
@@ -242,9 +208,9 @@ class SubAgent:
                 elif event.get("type") == "error":
                     raise event["error"]
         except Exception as exc:  # noqa: BLE001
-            return AgentMessage.error(self.name, str(exc), usage, 1)
+            return SubAgentResult(str(exc), usage, 1, failed=True)
         self.history = [*messages, Message(role="assistant", content=text)]
-        return AgentMessage.result(self.name, text, usage, 1)
+        return SubAgentResult(text, usage, 1)
 
     def _system_prompt(self) -> str:
         base = PromptAssembler(
@@ -318,15 +284,12 @@ class AgentOrchestrator:
                 yield {"type": "plan_status", "phase": "planning"}
                 yield {"type": "text_delta", "text": "Phase 1: planner\n\n"}
                 plan_result = await self.planner.execute(
-                    AgentMessage.task(
-                        "orchestrator",
-                        f"Create an execution plan for:\n{planning_task}",
-                    )
+                    f"Create an execution plan for:\n{planning_task}"
                 )
                 self.total_usage = self.total_usage + plan_result.usage
                 self.total_turns += plan_result.turns
                 self.planner.clear_history()
-                if plan_result.type == AgentMessageType.ERROR:
+                if plan_result.failed:
                     raise RuntimeError(f"planner failed: {plan_result.content}")
                 steps = self.parse_plan(plan_result.content)
                 if not steps:
@@ -434,11 +397,10 @@ class AgentOrchestrator:
     ) -> None:
         self._update_step(steps, step.id, step.started())
         context = self.build_step_context(steps, step)
-        task_msg = AgentMessage.task("orchestrator", step.description)
-        result = await worker.execute(task_msg, context, mode=step.mode)
+        result = await worker.execute(step.description, context, mode=step.mode)
         self.total_usage = self.total_usage + result.usage
         self.total_turns += result.turns
-        if result.type == AgentMessageType.ERROR or not result.content.strip():
+        if result.failed or not result.content.strip():
             self._update_step(steps, step.id, step.with_failed(result.content or "empty result"))
             return
 
@@ -454,10 +416,10 @@ class AgentOrchestrator:
             retries += 1
             retry_count[step.id] = retries
             retry_context = context + f"\n\nReviewer rejected the previous result:\n{issues}"
-            retry_result = await worker.execute(task_msg, retry_context, mode=step.mode)
+            retry_result = await worker.execute(step.description, retry_context, mode=step.mode)
             self.total_usage = self.total_usage + retry_result.usage
             self.total_turns += retry_result.turns
-            if retry_result.type == AgentMessageType.ERROR or not retry_result.content.strip():
+            if retry_result.failed or not retry_result.content.strip():
                 issues = retry_result.content or "empty retry result"
                 continue
             accepted_result = retry_result.content

@@ -6,13 +6,12 @@ from typing import Any
 import pytest
 
 from vela.agent.orchestrator import (
-    AgentMessage,
-    AgentMessageType,
     AgentOrchestrator,
     AgentRole,
     ExecutionStep,
     StepStatus,
     SubAgent,
+    SubAgentResult,
 )
 from vela.config import load_config
 from vela.task_control import PlanReviewDecision, TaskCancelledError
@@ -176,9 +175,9 @@ def test_subagent_can_delegate_its_task_to_plan_execute(tmp_path, monkeypatch):
 
     monkeypatch.setattr("vela.agent.plan_graph.LangGraphPlanAgent.run", fake_plan_run)
 
-    result = asyncio.run(worker.execute(AgentMessage.task("test", "complex task"), mode="plan"))
+    result = asyncio.run(worker.execute("complex task", mode="plan"))
 
-    assert result.type == AgentMessageType.RESULT
+    assert not result.failed
     assert result.content == "nested plan completed"
     assert result.usage.total_tokens == 15
     assert result.turns == 3
@@ -196,11 +195,9 @@ def test_subagent_plan_depth_is_bounded(tmp_path, monkeypatch):
         max_plan_depth=1,
     )
 
-    result = asyncio.run(
-        worker.execute(AgentMessage.task("test", "recursive task"), mode="plan", plan_depth=1)
-    )
+    result = asyncio.run(worker.execute("recursive task", mode="plan", plan_depth=1))
 
-    assert result.type == AgentMessageType.ERROR
+    assert result.failed
     assert "depth limit" in result.content
 
 
@@ -212,12 +209,11 @@ def test_reviewer_rejection_after_retry_marks_step_failed(tmp_path, monkeypatch)
 
     class Worker:
         async def execute(self, task, context, *, mode):  # noqa: ARG002
-            return AgentMessage.result("worker", "unverified result")
+            return SubAgentResult("unverified result")
 
     class Reviewer:
         async def review(self, original_task, execution_result):  # noqa: ARG002
-            return AgentMessage.result(
-                "reviewer",
+            return SubAgentResult(
                 '{"approved":false,"issues":["missing verification"]}',
             )
 

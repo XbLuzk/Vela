@@ -31,8 +31,7 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `/plan`
   - `/plan --resume`
   - `/team`
-  - `/model` Default/Custom Tab selector with live client switching
-  - persisted BYOK DeepSeek/GLM/OpenAI-compatible custom models
+  - `/model` built-in model selector and direct provider/model switching
   - `/usage`
   - `/skill`
   - `/mcp`

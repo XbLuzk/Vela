@@ -80,16 +80,8 @@ class RichRenderer:
     def banner(
         self,
         *,
-        model: str,
-        provider: str,
-        cwd: str,
-        tools: int,
         version: str = "0.2.0",
         api_key_configured: bool = False,
-        mcp_servers: int = 0,
-        skills: int = 0,
-        agents_files: int = 0,
-        hitl_mode: str = "auto",
     ) -> None:
         top = Table.grid(expand=True)
         top.add_column(ratio=1)
@@ -98,9 +90,6 @@ class RichRenderer:
             self._identity_panel(version=version, api_key_configured=api_key_configured),
             self._release_panel(version=version),
         )
-
-        _ = model, provider, cwd, tools, mcp_servers, skills, agents_files, hitl_mode
-
         self.console.print()
         self.console.print(top)
         self.console.print(Align.right(Text("? for shortcuts", style="dim")))

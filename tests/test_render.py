@@ -53,16 +53,8 @@ def test_banner_renders_vela_constellation_layout():
     renderer = RichRenderer(console=console)
 
     renderer.banner(
-        model="deepseek-v4-flash",
-        provider="deepseek",
-        cwd="/tmp/project",
-        tools=12,
         version="0.1.0",
         api_key_configured=True,
-        mcp_servers=1,
-        skills=3,
-        agents_files=2,
-        hitl_mode="never",
     )
 
     output = stream.getvalue()
