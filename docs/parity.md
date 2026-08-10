@@ -9,13 +9,11 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `vela -p`
   - `--provider`
   - `--model`
-  - `--plain`
   - `--mode react|plan|team`
   - `--worker-mode react|plan`
-  - `--json` usage/cost output
+  - `--json` usage output
   - `--cwd`
   - `vela doctor`
-  - `vela serve --http --port <port>`
 - REPL:
   - `/help`
   - `/clear`
@@ -30,17 +28,12 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `/hitl`
   - `/policy`
   - `/audit`
-  - `/index`
-  - `/search`
   - `/plan`
   - `/plan --resume`
   - `/team`
   - `/model` Default/Custom Tab selector with live client switching
   - persisted BYOK DeepSeek/GLM/OpenAI-compatible custom models
   - `/usage`
-  - `/task`
-  - `/snapshot`
-  - `/restore`
   - `/skill`
   - `/mcp`
   - `/exit`
@@ -61,8 +54,6 @@ This file tracks the Python port against the existing Java and TypeScript implem
     replay, uncertain retry gates, and overwrite `write_file` reconciliation
   - Multi-Agent orchestrator with Planner, Worker, Reviewer, dependency scheduling, parallel workers, review approval parsing, bounded retry, and per-worker `react|plan` mode
   - isolated Skill context per SubAgent and per parallel Plan task
-  - SDK entrypoint with ReAct, Plan-and-Execute, and Multi-Agent methods
-  - pre/post side-history snapshots around Agent runs
 - Configuration:
   - defaults
   - user config
@@ -84,8 +75,6 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `search_memory`
   - `load_skill`
   - `save_skill` with mandatory HITL approval
-  - `search_code`
-  - `revert_turn`
 - Safety:
   - PathGuard
   - CommandGuard
@@ -106,11 +95,6 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - name/description/tag Top-K matcher with Chinese n-gram support
   - safe project/user create/update and model-proposed `save_skill`
   - `/skill list/show/on/off/reload`
-- RAG:
-  - SQLite local code index
-  - `/index`
-  - `/search`
-  - `search_code`
 - MCP:
   - official MCP Python SDK client
   - stdio MCP server connection
@@ -120,32 +104,12 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - virtual prompt tools
   - `vela mcp init-chrome`
   - `vela mcp list`
-  - Vela MCP server over stdio/http for built-in tools
 - Chrome DevTools MCP:
   - project/user config writer for `npx chrome-devtools-mcp@latest`
   - `--browser-url`
   - `--headless`
   - `--slim`
   - usage-statistics opt-out flag by default
-- Runtime:
-  - API key requirement
-  - `POST /v1/threads`
-  - `POST /v1/threads/{id}/turns`
-  - `GET /v1/threads/{id}/events`
-  - `POST /v1/tasks`
-  - `GET /v1/tasks`
-  - `GET /v1/tasks/{id}`
-  - `POST /v1/tasks/{id}/cancel`
-  - SQLite durable task queue
-  - task modes `react|plan|team`
-  - atomic claim, project scope, lease/heartbeat recovery, and cancellation-safe completion
-  - standalone `vela worker`
-  - persisted Runtime thread history
-- Snapshot:
-  - `pre-turn` / `post-turn`
-  - `/snapshot`
-  - `/restore`
-  - `revert_turn`
 - Image input:
   - `@image:path`
   - `@image:<path with spaces>`
@@ -158,11 +122,10 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - provider/model capability fallback
 - Diagnostics:
   - Python syntax diagnostics after `write_file`
-- Usage and cost:
+- Usage:
   - OpenAI-compatible streaming usage-only chunks
   - input/output/cache-hit/cache-miss/reasoning token aggregation
-  - dated DeepSeek V4 Flash/Pro price profiles with config overrides
-  - ReAct/Plan/Team SDK and CLI aggregation
+  - ReAct/Plan/Team CLI aggregation
 
 ## Live Dependencies
 
@@ -170,7 +133,6 @@ These features need external credentials or platform state for live verification
 
 - Real LLM calls need API keys.
 - Chrome DevTools MCP needs Node.js LTS, npm/npx, and Chrome.
-- Runtime API turn execution needs a working LLM key.
 
 ## Intentionally Excluded Java-Only Area
 
@@ -188,9 +150,9 @@ The Java implementation has a WeChat iLink channel. Vela intentionally does not 
   interrupted Plan recovery.
 
 Vela already exceeds the Java implementation in persistent project sessions, LangGraph Plan
-checkpoints, tool-boundary execution journaling, completed-result replay, uncertain-call recovery,
-and leased background task execution. Parity therefore means closing the public product workflow,
-not reproducing every Java-only integration.
+checkpoints, tool-boundary execution journaling, completed-result replay, and uncertain-call
+recovery. Parity therefore means closing the public product workflow, not reproducing every
+Java-only integration.
 
 ## Verification
 
@@ -201,5 +163,4 @@ uv run --extra dev python -m pytest
 uv build
 uv run vela --help
 uv run vela doctor --cwd .
-uv run vela mcp serve --transport http --port 3999
 ```

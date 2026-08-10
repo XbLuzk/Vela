@@ -4,7 +4,6 @@ import asyncio
 import json
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
@@ -15,7 +14,6 @@ from vela.llm.base import LlmClient
 from vela.prompt import PromptAssembler
 from vela.session import bounded_tool_transcript
 from vela.skill import SkillContextBuffer
-from vela.snapshot import SnapshotService
 from vela.task_control import (
     PlanReviewAction,
     PlanReviewDecision,
@@ -317,9 +315,6 @@ class AgentOrchestrator:
         self.total_turns = 0
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
-        snapshot = SnapshotService(self.cwd)
-        with suppress(Exception):
-            snapshot.create("pre-turn")
         final_text = ""
         self.total_usage = Usage()
         self.total_turns = 0
@@ -374,9 +369,6 @@ class AgentOrchestrator:
         except Exception as exc:  # noqa: BLE001
             yield {"type": "error", "error": exc}
             return
-        finally:
-            with suppress(Exception):
-                snapshot.create("post-turn")
         done: dict[str, Any] = {
             "type": "done",
             "total_turns": self.total_turns,
@@ -384,9 +376,6 @@ class AgentOrchestrator:
             "usage": self.total_usage.to_dict(),
             "messages": self.history,
         }
-        costs = _calculate_costs(self.llm_client, self.total_usage)
-        if costs:
-            done["cost"] = costs
         yield done
 
     async def _review_plan(self, steps: list[ExecutionStep]) -> PlanReviewDecision:
@@ -667,16 +656,3 @@ def _normalize_worker_mode(mode: str) -> str:
     if value not in {item.value for item in AgentRunMode}:
         raise ValueError("worker mode must be react or plan")
     return value
-
-
-def _calculate_costs(llm_client: LlmClient, usage: Usage) -> dict[str, Any]:
-    calculator = getattr(llm_client, "calculate_cost", None)
-    if not callable(calculator):
-        return {}
-    result: dict[str, Any] = {}
-    for currency in ("usd", "cny"):
-        try:
-            result[currency] = calculator(usage, currency=currency).to_dict()
-        except (KeyError, TypeError, ValueError):
-            continue
-    return result

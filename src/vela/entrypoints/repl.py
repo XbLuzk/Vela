@@ -37,12 +37,9 @@ from vela.llm.model_profiles import (
 from vela.memory import MemoryManager
 from vela.policy import AuditLog
 from vela.prompt import PromptAssembler
-from vela.rag import CodeIndex
 from vela.render import RichRenderer
-from vela.runtime import DurableTaskManager
 from vela.session import ActiveSession, finalize_interrupted_history
 from vela.skill import SkillRegistry
-from vela.snapshot import SnapshotService
 from vela.task_control import InteractiveTaskController, TaskState
 from vela.tools import ToolRegistry
 from vela.types import Message
@@ -62,17 +59,12 @@ SLASH_COMMANDS = [
     "/hitl",
     "/policy",
     "/audit",
-    "/index",
-    "/search",
     "/plan",
     "/team",
     "/model",
     "/usage",
     "/skill",
     "/mcp",
-    "/task",
-    "/snapshot",
-    "/restore",
 ]
 
 INTERACTIVE_HELP = """\
@@ -163,13 +155,6 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
     permission_mode = PermissionModeController(config)
     registry, mcp_manager = await build_tool_registry(config=config, cwd=cwd)
     client = create_llm_client(config.llm)
-    system_prompt = PromptAssembler(
-        config=config,
-        cwd=cwd,
-        tool_names=registry.list_names(),
-        model=client.model_name,
-        provider=client.provider_name,
-    ).build_static()
     tool_count = len(registry.list_names())
     mcp_server_count = _count_mcp_servers(mcp_manager)
     skill_count = len(SkillRegistry(cwd).list())
@@ -193,7 +178,6 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
     agent = Agent(
         llm_client=client,
         tool_registry=registry,
-        system_prompt=system_prompt,
         cwd=cwd,
         config=config,
         plan_review_callback=task_controller.request_plan_review,
@@ -452,7 +436,6 @@ async def _handle_slash(
         table.add_row("cwd", cwd)
         table.add_row("model", f"{config.llm.model} ({config.llm.provider})")
         table.add_row("context window", str(agent.llm_client.max_context_window))
-        table.add_row("render", config.render_mode)
         table.add_row("memory", f"{len(memories)} recent entries")
         table.add_row("tools", str(len(registry.list_names())))
         console.print(table)
@@ -482,13 +465,6 @@ async def _handle_slash(
         console.print_json(
             json.dumps(AuditLog(config.policy.audit_log_path).tail(limit), ensure_ascii=False)
         )
-    elif command == "/index":
-        count = CodeIndex(cwd).rebuild(arg or ".")
-        console.print(f"Indexed {count} code lines.")
-    elif command == "/search":
-        results = CodeIndex(cwd).search(arg, limit=20)
-        output = "\n".join(f"{r.path}:{r.line}: {r.snippet}" for r in results)
-        console.print(output or "(no matches)")
     elif command == "/plan":
         if not arg:
             console.print("[red]Usage:[/red] /plan <task>")
@@ -557,28 +533,11 @@ async def _handle_slash(
     elif command == "/model":
         await _model_command(arg, console, cwd, config, agent, registry, renderer)
     elif command == "/usage":
-        payload = {
-            "usage": agent.last_usage.to_dict(),
-            "cost": agent.last_cost,
-            "pricing_note": "Built-in provider prices are dated defaults and may change.",
-        }
-        console.print_json(json.dumps(payload, ensure_ascii=False))
+        console.print_json(json.dumps(agent.last_usage.to_dict(), ensure_ascii=False))
     elif command == "/skill":
         _skill_command(arg, console, cwd)
     elif command == "/mcp":
-        console.print(
-            f"Use `{CLI_NAME} mcp serve --transport stdio|http --port 3000` to expose tools."
-        )
-    elif command == "/task":
-        _task_command(arg, console, cwd)
-    elif command == "/snapshot":
-        _snapshot_command(arg, console, cwd)
-    elif command == "/restore":
-        if not arg:
-            console.print("[red]Usage:[/red] /restore <snapshot-id-or-index>")
-        else:
-            record = SnapshotService(cwd).restore(arg)
-            console.print(f"Restored {record.id}")
+        console.print(f"Use `{CLI_NAME} mcp list` to inspect configured MCP servers.")
     else:
         console.print(f"[red]Unknown command:[/red] {command}")
     return False
@@ -915,49 +874,6 @@ def _skill_command(arg: str, console: Console, cwd: str) -> None:
         for item in rows
     ]
     console.print("\n".join(lines) or "(no skills)")
-
-
-def _task_command(arg: str, console: Console, cwd: str) -> None:
-    manager = DurableTaskManager(Path.home() / ".vela" / "tasks" / "tasks.db", scope=cwd)
-    sub, _, rest = arg.partition(" ")
-    if sub == "add" and rest:
-        try:
-            mode, prompt = _parse_mode_argument(rest, allowed={"react", "plan", "team"})
-        except ValueError as exc:
-            console.print(f"[red]{exc}[/red]")
-            return
-        task_id = manager.add(prompt, mode=mode)
-        consume_hint = f"Run `{CLI_NAME} worker` or `{CLI_NAME} serve` to consume it."
-        console.print(f"Queued {task_id} ({mode}). {consume_hint}")
-    elif sub == "cancel" and rest:
-        console.print(f"Canceled: {manager.cancel(rest.strip())}")
-    elif sub == "log" and rest:
-        task = manager.get(rest.strip())
-        if not task:
-            console.print("(task not found)")
-        else:
-            console.print(task.result or task.error or f"Task {task.id} is {task.status}")
-    else:
-        rows = manager.list(limit=20)
-        console.print(
-            "\n".join(
-                f"{task.id} {task.status} {task.mode} attempts={task.attempts} {task.prompt[:80]}"
-                for task in rows
-            )
-            or "(no tasks)"
-        )
-
-
-def _snapshot_command(arg: str, console: Console, cwd: str) -> None:
-    service = SnapshotService(cwd)
-    if arg == "clean":
-        console.print(f"Cleaned {service.clean()} snapshots.")
-        return
-    rows = service.list(limit=20)
-    output = "\n".join(
-        f"{index}. {row.id} {row.phase} {row.created_at}" for index, row in enumerate(rows, 1)
-    )
-    console.print(output or "(no snapshots)")
 
 
 async def _approval_prompt(

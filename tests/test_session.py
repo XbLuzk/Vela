@@ -723,7 +723,6 @@ class _ErrorClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
     max_context_window = 1_000
-    price_profile = None
 
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
         yield {"type": "error", "error": RuntimeError("provider failed")}
@@ -753,7 +752,6 @@ class _FakeAgent:
     def __init__(self):
         self.history = []
         self.last_usage = None
-        self.last_cost = {}
         self.llm_client = SimpleNamespace(max_context_window=1_000)
 
     def clear_history(self):

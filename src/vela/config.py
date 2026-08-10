@@ -20,9 +20,6 @@ class LlmConfig:
     api_key: str = ""
     base_url: str | None = None
     context_window: int | None = None
-    # Optional per-million-token overrides, keyed by currency then
-    # input_cache_hit/input_cache_miss/output. Provider prices can change.
-    prices: dict[str, dict[str, float]] = field(default_factory=dict)
     max_tokens: int = 8192
     temperature: float = 0.7
     timeout: float = 120.0
@@ -30,18 +27,9 @@ class LlmConfig:
 
 @dataclass(slots=True)
 class ToolsConfig:
-    enabled: list[str] = field(default_factory=list)
-    disabled: list[str] = field(default_factory=list)
     timeout: float = 60.0
-    batch_timeout: float = 90.0
     max_concurrent_read: int = 4
     execution_journal_path: str = "~/.vela/tool-executions.sqlite"
-
-
-@dataclass(slots=True)
-class McpConfig:
-    servers: list[dict[str, Any]] = field(default_factory=list)
-    auto_start: bool = True
 
 
 @dataclass(slots=True)
@@ -53,7 +41,6 @@ class MemoryConfig:
     max_memory_chars: int = 8_000
     recall_limit: int = 6
     recall_min_score: float = 0.05
-    token_budget_mode: str = "balanced"
     compression_threshold: float = 0.8
     compression_target: float = 0.55
     compression_reserve_tokens: int = 1_024
@@ -98,15 +85,12 @@ class FeatureConfig:
     memory: bool = True
     audit_log: bool = True
     context_compression: bool = True
-    code_index: bool = True
 
 
 @dataclass(slots=True)
 class VelaConfig:
     llm: LlmConfig = field(default_factory=LlmConfig)
-    render_mode: str = "inline"
     tools: ToolsConfig = field(default_factory=ToolsConfig)
-    mcp: McpConfig = field(default_factory=McpConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
@@ -238,13 +222,6 @@ def _apply_env(data: dict[str, Any], env: dict[str, str | None]) -> dict[str, An
     if provider_base_url_key and env.get(provider_base_url_key):
         llm["base_url"] = env[provider_base_url_key]
 
-    render_mode = env.get("VELA_RENDER_MODE") or env.get("VELA_RENDERER")
-    if render_mode in {"plain", "inline"}:
-        result["render_mode"] = render_mode
-
-    if env.get("VELA_TUI") == "true":
-        result["render_mode"] = "inline"
-
     for env_key, feature_key in [
         ("VELA_MCP", "mcp"),
         ("VELA_SKILL", "skill"),
@@ -283,9 +260,7 @@ def _config_to_dict(config: VelaConfig) -> dict[str, Any]:
 def _dict_to_config(data: dict[str, Any]) -> VelaConfig:
     return VelaConfig(
         llm=LlmConfig(**data.get("llm", {})),
-        render_mode=data.get("render_mode", "inline"),
         tools=ToolsConfig(**data.get("tools", {})),
-        mcp=McpConfig(**data.get("mcp", {})),
         memory=MemoryConfig(**data.get("memory", {})),
         policy=PolicyConfig(**data.get("policy", {})),
         prompt=PromptConfig(**data.get("prompt", {})),

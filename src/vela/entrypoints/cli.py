@@ -17,8 +17,6 @@ Usage modes::
 
     # Tooling
     vela doctor              # system health check
-    vela serve               # Runtime HTTP API
-    vela mcp serve           # Expose tools via MCP
     vela mcp init-chrome     # Configure Chrome DevTools MCP
 """
 
@@ -42,9 +40,7 @@ from vela.branding import CLI_NAME, PRODUCT_NAME
 from vela.config import get_config_paths, load_config
 from vela.entrypoints.repl import start_repl
 from vela.llm import create_llm_client
-from vela.mcp import load_mcp_server_specs, serve_http, serve_stdio, write_chrome_devtools_config
-from vela.runtime import RuntimeApiServer
-from vela.runtime.api import runtime_api_key
+from vela.mcp import load_mcp_server_specs, write_chrome_devtools_config
 
 app = typer.Typer(
     name=CLI_NAME,
@@ -52,7 +48,7 @@ app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
-mcp_app = typer.Typer(help="MCP server management")
+mcp_app = typer.Typer(help="External MCP server management")
 app.add_typer(mcp_app, name="mcp")
 console = Console()
 
@@ -92,11 +88,6 @@ def main(
         str | None,
         typer.Option("--base-url", help="Override LLM API base URL"),
     ] = None,
-    # --- Rendering ---
-    plain: Annotated[
-        bool,
-        typer.Option("--plain", help="Use plain text rendering (no rich formatting)"),
-    ] = False,
     # --- Agent mode ---
     mode: Annotated[
         str | None,
@@ -109,7 +100,7 @@ def main(
     # --- Output ---
     json_output: Annotated[
         bool,
-        typer.Option("--json", help="Emit result, usage, and cost as JSON (single-prompt only)"),
+        typer.Option("--json", help="Emit result and usage as JSON (single-prompt only)"),
     ] = False,
     # --- Workspace ---
     cwd: Annotated[
@@ -125,7 +116,7 @@ def main(
     """Vela — a terminal AI agent that works in your workspace.
 
     Start an interactive session (default), run a single prompt with -p,
-    or use the subcommands for diagnostics, serving, and MCP management.
+    or use the subcommands for diagnostics and MCP management.
     """
     _ = version
     if ctx.invoked_subcommand is not None:
@@ -151,12 +142,7 @@ def main(
         llm_overrides["base_url"] = base_url
     if llm_overrides:
         overrides["llm"] = llm_overrides
-    if plain:
-        overrides["render_mode"] = "plain"
-
     config = load_config(project_root=root, overrides=overrides)
-    if plain:
-        config.render_mode = "plain"
 
     if prompt is not None:
         selected_mode = (mode or config.prompt.agent_mode or "react").lower()
@@ -207,68 +193,9 @@ def doctor(
     console.print_json(json.dumps(checks, ensure_ascii=False))
 
 
-@app.command("serve")
-def runtime_serve(
-    http: Annotated[bool, typer.Option("--http", help="Serve Runtime API over HTTP")] = True,
-    port: Annotated[int, typer.Option("--port", help="HTTP port")] = 8080,
-    api_key: Annotated[
-        str | None,
-        typer.Option("--api-key", help="Runtime API key. Defaults to VELA_RUNTIME_API_KEY."),
-    ] = None,
-    cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
-) -> None:
-    """Start the durable task runtime server (HTTP API)."""
-    _ = http
-    root = (cwd or Path.cwd()).resolve()
-    config = load_config(project_root=root)
-    try:
-        key = runtime_api_key(api_key)
-    except ValueError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(1) from exc
-    RuntimeApiServer(cwd=str(root), config=config, api_key=key, port=port).serve_forever()
-
-
-@app.command("worker")
-def task_worker(
-    workers: Annotated[int, typer.Option("--workers", help="Concurrent task workers")] = 2,
-    cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
-) -> None:
-    """Consume durable background tasks without the HTTP API server."""
-    if workers < 1:
-        raise typer.BadParameter("workers must be at least 1")
-    root = (cwd or Path.cwd()).resolve()
-    config = load_config(project_root=root)
-    RuntimeApiServer(
-        cwd=str(root),
-        config=config,
-        api_key="worker-only-not-exposed",
-        workers=workers,
-    ).work_forever()
-
-
 # ---------------------------------------------------------------------------
 # MCP subcommands
 # ---------------------------------------------------------------------------
-
-
-@mcp_app.command("serve")
-def mcp_serve(
-    transport: Annotated[
-        str,
-        typer.Option("--transport", help="Transport type: stdio or http"),
-    ] = "stdio",
-    port: Annotated[int, typer.Option("--port", help="HTTP port")] = 3000,
-    cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
-) -> None:
-    """Expose Vela tools via the Model Context Protocol."""
-    root = str((cwd or Path.cwd()).resolve())
-    if transport == "http":
-        serve_http(port=port, cwd=root)
-    elif transport == "stdio":
-        asyncio.run(serve_stdio(cwd=root))
-    else:
-        raise typer.BadParameter("transport must be stdio or http")
 
 
 @mcp_app.command("init-chrome")
@@ -328,7 +255,6 @@ async def _run_prompt(
     json_output: bool = False,
 ) -> None:
     """Execute a single prompt and print the result."""
-    config.render_mode = "plain"
     if not config.llm.api_key:
         typer.echo(
             "Fatal error: LLM API key is not configured. Set it with --api-key, "
@@ -367,7 +293,6 @@ async def _run_prompt(
                     "turns": result.turns,
                     "total_tokens": result.total_tokens,
                     "usage": result.usage.to_dict(),
-                    "cost": result.cost,
                 },
                 ensure_ascii=False,
             )

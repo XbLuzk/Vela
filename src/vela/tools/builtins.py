@@ -6,9 +6,7 @@ from typing import Any
 
 from vela.memory import MemoryManager
 from vela.policy import CommandGuard
-from vela.rag import CodeIndex
 from vela.skill import SkillRegistry
-from vela.snapshot import SnapshotService
 from vela.tools import file_ops as fops
 from vela.tools.base import Tool, ToolContext, ToolResult, object_schema
 from vela.tools.file_ops import FileOpResult
@@ -346,33 +344,6 @@ def get_builtin_tools() -> list[Tool]:
             danger_level="medium",
             requires_approval=True,
         ),
-        Tool(
-            name="search_code",
-            description="Search the local code index for semantically relevant lines.",
-            parameters=object_schema(
-                {
-                    "query": {"type": "string", "description": "Search query"},
-                    "limit": {"type": "number", "description": "Maximum matches"},
-                },
-                ["query"],
-            ),
-            required_keys=["query"],
-            handler=_search_code,
-        ),
-        Tool(
-            name="revert_turn",
-            description="Restore the workspace to a previous Vela side-history snapshot.",
-            parameters=object_schema(
-                {"snapshot": {"type": "string", "description": "Snapshot id or 1-based index"}},
-                ["snapshot"],
-            ),
-            required_keys=["snapshot"],
-            handler=_revert_turn,
-            is_read_only=False,
-            is_concurrency_safe=False,
-            danger_level="high",
-            requires_approval=True,
-        ),
     ]
     return tools
 
@@ -605,7 +576,7 @@ async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolR
     return ToolResult(content, display_summary=f"Recalled {len(rows)} memories")
 
 
-# Keep the original handler imports working for SDK users and existing tests.
+# Public handler aliases used by direct tool tests.
 save_memory = _save_memory
 search_memory = _search_memory
 
@@ -671,29 +642,6 @@ async def _save_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
 
 
 load_skill = _load_skill
-
-
-# ---------------------------------------------------------------------------
-# Handler: code search
-# ---------------------------------------------------------------------------
-
-
-async def _search_code(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    index = CodeIndex(context.cwd)
-    results = index.search(str(payload["query"]), limit=int(payload.get("limit") or 20))
-    if not results:
-        return ToolResult("(no indexed matches; run /index first)")
-    return ToolResult("\n".join(f"{item.path}:{item.line}: {item.snippet}" for item in results))
-
-
-# ---------------------------------------------------------------------------
-# Handler: snapshot revert
-# ---------------------------------------------------------------------------
-
-
-async def _revert_turn(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    record = SnapshotService(context.cwd).restore(str(payload["snapshot"]))
-    return ToolResult(f"Restored snapshot {record.id}")
 
 
 # ---------------------------------------------------------------------------

@@ -7,4 +7,4 @@ module instead of embedding the legacy project name.
 
 PRODUCT_NAME = "Vela"
 CLI_NAME = "vela"
-USER_AGENT = "Vela/0.1.1"
+USER_AGENT = "Vela/0.2.0"

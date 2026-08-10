@@ -24,7 +24,6 @@ from vela.plan import ExecutionPlan, Planner, Task, TaskStatus, TaskType
 from vela.prompt import PromptAssembler
 from vela.session import bounded_tool_transcript
 from vela.skill import SkillContextBuffer
-from vela.snapshot import SnapshotService
 from vela.task_control import (
     PlanReviewAction,
     PlanReviewDecision,
@@ -96,9 +95,6 @@ class LangGraphPlanAgent:
         self._allow_uncertain_tool_retry = False
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
-        snapshot = SnapshotService(self.cwd)
-        with suppress(Exception):
-            snapshot.create("pre-turn")
         self.history = [Message(role="user", content=message or "继续之前的计划")]
         try:
             async with _open_checkpointer(
@@ -210,17 +206,11 @@ class LangGraphPlanAgent:
                         "status": values.get("status"),
                     },
                 }
-                costs = _calculate_costs(self.llm_client, usage)
-                if costs:
-                    done["cost"] = costs
                 yield done
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - preserve the shared streaming error contract
             yield {"type": "error", "error": exc}
-        finally:
-            with suppress(Exception):
-                snapshot.create("post-turn")
 
     def _build_graph(self, checkpointer: AsyncSqliteSaver | InMemorySaver):
         builder = StateGraph(PlanGraphState)
@@ -610,16 +600,3 @@ def _sum_usage(events: list[dict[str, Any]]) -> Usage:
     for event in events:
         total = total + Usage.from_mapping(event)
     return total
-
-
-def _calculate_costs(llm_client: LlmClient, usage: Usage) -> dict[str, Any]:
-    calculator = getattr(llm_client, "calculate_cost", None)
-    if not callable(calculator):
-        return {}
-    result: dict[str, Any] = {}
-    for currency in ("usd", "cny"):
-        try:
-            result[currency] = calculator(usage, currency=currency).to_dict()
-        except (KeyError, TypeError, ValueError):
-            continue
-    return result

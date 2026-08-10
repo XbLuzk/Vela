@@ -8,7 +8,6 @@ from typing import Any
 import httpx
 
 from vela.branding import USER_AGENT
-from vela.llm.pricing import CostBreakdown, ModelPriceProfile, calculate_cost
 from vela.types import Message, Usage
 
 
@@ -23,7 +22,6 @@ class OpenAICompatibleClient:
     timeout: float = 120.0
     max_context_window: int = 128_000
     prompt_cache: bool = False
-    price_profile: ModelPriceProfile | None = None
 
     @property
     def model_name(self) -> str:
@@ -36,19 +34,6 @@ class OpenAICompatibleClient:
         return any(marker in model for marker in ("vision", "image", "5v", "vl")) or (
             provider in {"glm", "zhipu"} and "5v" in model
         )
-
-    def calculate_cost(
-        self,
-        usage: Usage | dict[str, Any],
-        *,
-        currency: str = "usd",
-    ) -> CostBreakdown:
-        if self.price_profile is None:
-            raise ValueError(
-                f'No price profile is configured for model "{self.model}". '
-                "Set llm.prices in Vela config."
-            )
-        return calculate_cost(usage, self.price_profile, currency=currency)
 
     async def chat(
         self,

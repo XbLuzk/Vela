@@ -94,7 +94,6 @@ class QueryResult:
     total_tokens: int
     turns: int
     usage: Usage = field(default_factory=Usage)
-    cost: dict[str, Any] = field(default_factory=dict)
 
 
 def _first_int(value: dict[str, Any], *keys: str, fallback: Any = 0) -> int:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from vela.config import LlmConfig
 from vela.llm.openai_compatible import OpenAICompatibleClient
-from vela.llm.pricing import resolve_price_profile
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -41,11 +40,6 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
             timeout=config.timeout,
             max_context_window=context,
             prompt_cache=True,
-            price_profile=resolve_price_profile(
-                config.model,
-                context_window=context,
-                overrides=config.prices,
-            ),
         )
     if provider in {"openai", "openai-compatible", "compatible"}:
         context = config.context_window or 128_000
@@ -59,12 +53,6 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
             timeout=config.timeout,
             max_context_window=context,
             prompt_cache=False,
-            price_profile=resolve_price_profile(
-                config.model,
-                context_window=context,
-                overrides=config.prices,
-                include_builtin=False,
-            ),
         )
     if provider in PROVIDER_BASE_URLS:
         context = config.context_window or MODEL_CONTEXT_WINDOWS.get(config.model.lower(), 128_000)
@@ -78,12 +66,6 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
             timeout=config.timeout,
             max_context_window=context,
             prompt_cache=False,
-            price_profile=resolve_price_profile(
-                config.model,
-                context_window=context,
-                overrides=config.prices,
-                include_builtin=False,
-            ),
         )
     context = config.context_window or 64_000
     return OpenAICompatibleClient(
@@ -96,10 +78,4 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
         timeout=config.timeout,
         max_context_window=context,
         prompt_cache=False,
-        price_profile=resolve_price_profile(
-            config.model,
-            context_window=context,
-            overrides=config.prices,
-            include_builtin=False,
-        ),
     )

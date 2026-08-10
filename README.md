@@ -33,11 +33,11 @@ MCP 工具、管理长期记忆，并通过可恢复的 Session、LangGraph Chec
 | --- | --- |
 | Agent 运行时 | 支持 ReAct、LangGraph Plan-and-Execute 和 Planner/Worker/Reviewer 多 Agent 协作 |
 | 任务恢复 | 项目级持久化 Session、任务取消、Graph Checkpoint 和工具结果重放 |
-| 工具系统 | 文件、Shell、代码搜索、网页检索、记忆、Skill、MCP 和快照工具 |
+| 工具系统 | 文件、Shell、代码搜索、网页检索、记忆、Skill 和 MCP 工具 |
 | 安全控制 | HITL 人工确认、路径与命令策略、JSONL 审计日志和会话级权限切换 |
 | 上下文管理 | 静态项目指令、SQLite 长期记忆、相关性召回、Token 预算和上下文压缩 |
 | 多模态输入 | 支持本地图片、远程图片、`@image` 引用和 macOS 剪贴板图片 |
-| 集成方式 | 交互式 CLI、单次 Prompt、Python SDK、MCP Server 和 Runtime API |
+| 使用方式 | 交互式 CLI 和单次 Prompt |
 
 ## 快速开始
 
@@ -199,8 +199,6 @@ Team 模式由 Planner、Worker 和 Reviewer 组成。Planner 生成带依赖的
 /hitl default|auto
 /policy
 /audit [N]
-/index [path]
-/search <query>
 /plan <task>
 /plan --resume
 /team <task>
@@ -215,13 +213,6 @@ Team 模式由 Planner、Worker 和 Reviewer 组成。Planner 生成带依赖的
 /skill off <name>
 /skill reload
 /mcp
-/task
-/task add [--mode react|plan|team] <task>
-/task cancel <task_id>
-/task log <task_id>
-/snapshot
-/snapshot clean
-/restore <snapshot-id-or-index>
 ```
 
 </details>
@@ -233,14 +224,13 @@ Vela 内置的主要工具：
 | 类别 | 工具 |
 | --- | --- |
 | 文件 | `read_file`、`write_file`、`list_dir`、`glob_files` |
-| 搜索 | `grep_code`、`search_code` |
+| 搜索 | `grep_code` |
 | 命令 | `execute_command` |
 | 联网 | `web_search`、`web_fetch` |
 | 记忆 | `save_memory`、`search_memory` |
 | Skill | `load_skill`、`save_skill` |
-| 恢复 | `revert_turn`、快照工具 |
 
-写文件、执行命令、远程 MCP 写操作和恢复快照等危险动作会经过 Policy、HITL 和 Audit 处理。
+写文件、执行命令和远程 MCP 写操作等危险动作会经过 Policy、HITL 和 Audit 处理。
 `save_skill` 同样需要人工确认，模型不会静默改变后续行为。
 
 交互模式下按 `Shift+Tab` 切换权限：
@@ -328,89 +318,8 @@ uv run vela mcp init-chrome \
   --browser-url http://127.0.0.1:9222
 ```
 
-将 Vela 作为 MCP Server 暴露：
-
-```bash
-uv run vela mcp serve --transport stdio
-uv run vela mcp serve --transport http --port 3000
-```
-
 授权 Chrome DevTools MCP 前，请确认浏览器中没有不应暴露给 Agent 的个人账号、敏感数据或生产
 后台页面。
-
-## Runtime API
-
-Runtime API 提供持久化 Thread、Turn、事件和后台任务能力。
-
-启动服务：
-
-```bash
-VELA_RUNTIME_API_KEY=dev-key uv run vela serve --http --port 8080
-```
-
-<details>
-<summary><strong>查看 Runtime API 示例</strong></summary>
-
-创建 Thread：
-
-```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/threads \
-  -H 'x-api-key: dev-key'
-```
-
-发送 Turn：
-
-```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/threads/<thread_id>/turns \
-  -H 'content-type: application/json' \
-  -H 'x-api-key: dev-key' \
-  -d '{"message":"总结这个项目"}'
-```
-
-创建后台任务：
-
-```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
-  -H 'content-type: application/json' \
-  -H 'x-api-key: dev-key' \
-  -d '{"message":"后台总结这个仓库","mode":"plan"}'
-```
-
-</details>
-
-只启动任务 Worker：
-
-```bash
-uv run vela worker --workers 2 --cwd .
-```
-
-后台任务按项目目录隔离。Worker 使用 SQLite 原子事务领取任务，并通过 Lease 和 Heartbeat 恢复
-崩溃任务；取消任务后，迟到结果不会覆盖 `cancelled` 状态。
-
-## Python SDK
-
-```python
-from vela.sdk import create_default_engine
-
-engine = create_default_engine(cwd=".")
-
-result = engine.ask_complete("解释这个项目")
-plan_result = engine.plan_complete("先读取 README，再总结项目结构")
-team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
-
-print(result.text)
-```
-
-## 快照
-
-Vela 在每次 Agent Run 前后尽力创建 `pre-turn` 和 `post-turn` 快照。快照保存在
-`~/.vela/snapshots/`，不会写入项目 `.git`。
-
-```text
-/snapshot
-/restore 1
-/snapshot clean
-```
 
 ## 开发与验证
 
@@ -435,7 +344,7 @@ uv build
 uv run vela --version
 uv run vela --help
 uv run vela doctor --cwd .
-uv run vela --plain -p hello
+uv run vela -p hello
 ```
 
 贡献流程与 Pull Request 要求见 [贡献指南](CONTRIBUTING.md)。能力范围和实现状态见

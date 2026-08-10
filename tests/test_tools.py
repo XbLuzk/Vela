@@ -10,7 +10,6 @@ from vela.config import load_config
 from vela.tools import ToolRegistry, get_builtin_tools
 from vela.tools.base import ToolContext
 from vela.tools.builtins import save_memory, search_memory
-from vela.tools.commands import CommandExecutor
 from vela.tools.process import stop_subprocess
 
 
@@ -129,38 +128,6 @@ def test_subprocess_stop_bounds_wait_after_sigkill(monkeypatch):
 
     assert signals == [(4344, signal.SIGTERM), (4344, signal.SIGKILL)]
     assert process.waits == 2
-
-
-def test_command_executor_cancellation_stops_process_group(tmp_path, monkeypatch):
-    signals = []
-
-    class FakeProcess:
-        pid = 4444
-        returncode = None
-
-        async def communicate(self):
-            await asyncio.Event().wait()
-
-        async def wait(self):
-            self.returncode = -15
-            return self.returncode
-
-    async def create_process(*args, **kwargs):  # noqa: ARG001
-        return FakeProcess()
-
-    monkeypatch.setattr(asyncio, "create_subprocess_shell", create_process)
-    monkeypatch.setattr(os, "killpg", lambda pid, sig: signals.append((pid, sig)))
-
-    async def run():
-        task = asyncio.create_task(CommandExecutor().execute("sleep 60", cwd=str(tmp_path)))
-        await asyncio.sleep(0)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-    asyncio.run(run())
-
-    assert signals == [(4444, signal.SIGTERM)]
 
 
 def test_memory_tools_save_metadata_and_recall_relevant_items(tmp_path, monkeypatch):

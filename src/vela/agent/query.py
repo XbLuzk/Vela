@@ -77,7 +77,6 @@ async def query(
     while turn < max_turns:
         turn += 1
         text = ""
-        thinking = ""
         stop_reason = "end_turn"
         turn_usage = Usage()
         tool_states: dict[int, dict[str, Any]] = {}
@@ -110,7 +109,6 @@ async def query(
                 yield {"type": "text_delta", "text": delta}
             elif event_type == "thinking_delta":
                 delta = str(event.get("thinking") or "")
-                thinking += delta
                 yield {"type": "thinking_delta", "thinking": delta}
             elif event_type == "tool_call_delta":
                 _merge_tool_delta(tool_states, event["tool_call"])
@@ -127,10 +125,6 @@ async def query(
         total_usage = total_usage + turn_usage
         tool_calls = _finalize_tool_calls(tool_states)
         assistant_message = Message(role="assistant", content=text, tool_calls=tool_calls)
-        if thinking and text:
-            assistant_message.content = text
-        elif thinking:
-            assistant_message.content = ""
         messages.append(assistant_message)
         _sync_history(history_sink, messages)
         yield {"type": "turn_complete", "turn": turn, "stop_reason": stop_reason}
@@ -191,9 +185,6 @@ async def query(
         "usage": total_usage.to_dict(),
         "messages": messages,
     }
-    costs = _calculate_costs(llm_client, total_usage)
-    if costs:
-        done_event["cost"] = costs
     yield done_event
 
 
@@ -279,17 +270,3 @@ def _prepend_skill_candidates(user_message: str, cwd: str, config: VelaConfig) -
         lines.append(f"- {skill.name}: {description}{tags}")
     candidate_text = "\n".join(lines)
     return f"{candidate_text}\n\n---\nUser request:\n{user_message}"
-
-
-def _calculate_costs(llm_client: LlmClient, usage: Usage) -> dict[str, Any]:
-    calculator = getattr(llm_client, "calculate_cost", None)
-    if not callable(calculator):
-        return {}
-    result: dict[str, Any] = {}
-    for currency in ("usd", "cny"):
-        try:
-            breakdown = calculator(usage, currency=currency)
-        except (KeyError, TypeError, ValueError):
-            continue
-        result[currency] = breakdown.to_dict()
-    return result

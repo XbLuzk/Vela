@@ -76,22 +76,7 @@ class QueryEngine:
         message: str,
         history: list[Message] | None = None,
     ) -> QueryResult:
-        text = ""
-        tokens = 0
-        turns = 0
-        usage = Usage()
-        cost = {}
-        async for event in self.ask(message, history):
-            if event.get("type") == "text_delta":
-                text += str(event.get("text") or "")
-            elif event.get("type") == "error":
-                raise event["error"]
-            elif event.get("type") == "done":
-                tokens = int(event.get("total_tokens") or 0)
-                turns = int(event.get("total_turns") or 0)
-                usage = Usage.from_mapping(event.get("usage") or {})
-                cost = dict(event.get("cost") or {})
-        return QueryResult(text=text, total_tokens=tokens, turns=turns, usage=usage, cost=cost)
+        return await self._complete_from_events(self.ask(message, history))
 
     async def plan_complete_async(self, message: str) -> QueryResult:
         return await self._complete_from_events(self.plan(message))
@@ -113,7 +98,6 @@ class QueryEngine:
         tokens = 0
         turns = 0
         usage = Usage()
-        cost = {}
         async for event in events:
             if event.get("type") == "text_delta":
                 text += str(event.get("text") or "")
@@ -123,5 +107,4 @@ class QueryEngine:
                 tokens += int(event.get("total_tokens") or 0)
                 turns += int(event.get("total_turns") or 0)
                 usage = usage + Usage.from_mapping(event.get("usage") or {})
-                cost = dict(event.get("cost") or cost)
-        return QueryResult(text=text, total_tokens=tokens, turns=turns, usage=usage, cost=cost)
+        return QueryResult(text=text, total_tokens=tokens, turns=turns, usage=usage)

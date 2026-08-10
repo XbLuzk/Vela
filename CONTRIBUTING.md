@@ -1,7 +1,7 @@
 # Contributing to Vela
 
 感谢你愿意参与 Vela 的开发。Vela 是一个运行在终端中的 Python AI Agent CLI，支持
-ReAct、Plan-and-Execute、Multi-Agent、MCP、Skill、Memory、Runtime API 和多模态输入。
+ReAct、Plan-and-Execute、Multi-Agent、MCP、Skill、Memory 和多模态输入。
 
 ## 开发环境
 
@@ -25,8 +25,7 @@ uv run vela doctor --cwd .
 - 模型适配：`src/vela/llm/`
 - 工具与执行策略：`src/vela/tools/`、`src/vela/policy/`
 - MCP：`src/vela/mcp/`
-- Memory、Skill 与 RAG：`src/vela/memory/`、`src/vela/skill/`、`src/vela/rag/`
-- Runtime API 与后台任务：`src/vela/runtime/`
+- Memory 与 Skill：`src/vela/memory/`、`src/vela/skill/`
 
 公开行为发生变化时，请同步更新 README、相关文档和测试。不要提交 `.env`、API Key、
 Token、Cookie、私钥、本地数据库、日志或其他个人文件。
