@@ -11,13 +11,13 @@ from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 
 from vela.config import load_config
-from vela.entrypoints.repl import (
+from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
     PermissionModeController,
-    _bottom_toolbar,
-    _input_border_float,
-    _permission_key_bindings,
-    _prompt_message,
+    bottom_toolbar,
+    input_border_float,
+    permission_key_bindings,
+    prompt_message,
 )
 from vela.image import ClipboardImageResult
 from vela.render import RichRenderer
@@ -36,7 +36,7 @@ def test_rich_palette_follows_terminal_theme():
 
 
 def test_input_border_is_a_layout_float_below_the_cursor():
-    border = _input_border_float()
+    border = input_border_float()
 
     assert border.ycursor
     assert border.left == 2
@@ -74,7 +74,7 @@ def test_banner_renders_vela_constellation_layout():
 
 
 def test_prompt_message_keeps_status_and_input_together():
-    prompt = _prompt_message(
+    prompt = prompt_message(
         cwd="/tmp/project",
         model="deepseek-v4-flash",
         tools=12,
@@ -119,7 +119,7 @@ def test_permission_mode_toggle_applies_and_restores_full_access_policy(tmp_path
 
 def test_shift_tab_is_bound_to_permission_mode_toggle(tmp_path):
     controller = PermissionModeController(load_config(project_root=tmp_path))
-    bindings = _permission_key_bindings(controller)
+    bindings = permission_key_bindings(controller)
 
     assert any(binding.keys == (Keys.BackTab,) for binding in bindings.bindings)
 
@@ -127,14 +127,14 @@ def test_shift_tab_is_bound_to_permission_mode_toggle(tmp_path):
 def test_escape_is_bound_to_running_task_cancel(tmp_path):
     permission = PermissionModeController(load_config(project_root=tmp_path))
     task_controller = InteractiveTaskController()
-    bindings = _permission_key_bindings(permission, task_controller)
+    bindings = permission_key_bindings(permission, task_controller)
 
     assert any(binding.keys == (Keys.Escape,) for binding in bindings.bindings)
 
 
 def test_ctrl_v_is_bound_to_clipboard_image(tmp_path):
     permission = PermissionModeController(load_config(project_root=tmp_path))
-    bindings = _permission_key_bindings(permission)
+    bindings = permission_key_bindings(permission)
 
     assert any(binding.keys == (Keys.ControlV,) for binding in bindings.bindings)
 
@@ -148,7 +148,7 @@ def test_ctrl_v_injects_image_reference_without_submitting(tmp_path):
             session = PromptSession(
                 input=pipe_input,
                 output=DummyOutput(),
-                key_bindings=_permission_key_bindings(
+                key_bindings=permission_key_bindings(
                     permission,
                     clipboard_grabber=lambda: ClipboardImageResult.success(image_path),
                 ),
@@ -171,7 +171,7 @@ def test_ctrl_v_failure_preserves_existing_input(tmp_path):
             session = PromptSession(
                 input=pipe_input,
                 output=DummyOutput(),
-                key_bindings=_permission_key_bindings(
+                key_bindings=permission_key_bindings(
                     permission,
                     console=console,
                     clipboard_grabber=lambda: ClipboardImageResult.failure("no image"),
@@ -207,7 +207,7 @@ def test_ctrl_v_capture_does_not_block_prompt_event_loop(tmp_path):
             session = PromptSession(
                 input=pipe_input,
                 output=DummyOutput(),
-                key_bindings=_permission_key_bindings(
+                key_bindings=permission_key_bindings(
                     permission,
                     clipboard_grabber=slow_grabber,
                 ),
@@ -241,7 +241,7 @@ def test_shift_tab_input_toggles_live_permission_mode(tmp_path):
             session = PromptSession(
                 input=pipe_input,
                 output=DummyOutput(),
-                key_bindings=_permission_key_bindings(controller),
+                key_bindings=permission_key_bindings(controller),
             )
             pipe_input.send_text("\x1b[Z\r")
             await session.prompt_async()
@@ -253,7 +253,7 @@ def test_shift_tab_input_toggles_live_permission_mode(tmp_path):
 
 
 def test_bottom_toolbar_uses_runtime_summary_segments():
-    toolbar = _bottom_toolbar(
+    toolbar = bottom_toolbar(
         "/Users/me/project",
         "deepseek-v4-flash",
         {"turns": 1, "total_tokens": 13187, "context_ratio": 0.013, "has_usage": True},
@@ -268,7 +268,7 @@ def test_bottom_toolbar_uses_runtime_summary_segments():
 
 
 def test_bottom_toolbar_exposes_unified_task_state():
-    toolbar = _bottom_toolbar(
+    toolbar = bottom_toolbar(
         "/tmp/project",
         "fake-model",
         task_state=TaskState.CANCELLING,
@@ -471,7 +471,7 @@ def test_missing_usage_keeps_toolbar_tokens_unavailable():
     renderer.handle({"type": "done", "total_turns": 1, "total_tokens": 0})
 
     assert "Run Summary" not in stream.getvalue()
-    toolbar = _bottom_toolbar("/tmp/project", "deepseek-v4-flash", renderer.toolbar_status())
+    toolbar = bottom_toolbar("/tmp/project", "deepseek-v4-flash", renderer.toolbar_status())
     assert ("class:toolbar.model", "deepseek-v4-flash") in toolbar
     assert ("class:toolbar.ctx.bar", "░░░░░░░░░░░░") in toolbar
     assert ("class:toolbar.ctx.value", "0%") in toolbar

@@ -15,7 +15,17 @@ from vela.web import fetch_url, search_web
 
 
 def get_builtin_tools() -> list[Tool]:
-    tools = [
+    """Return the built-in tools in the order shown to the model."""
+
+    return [
+        *_workspace_tools(),
+        *_shell_and_web_tools(),
+        *_memory_and_skill_tools(),
+    ]
+
+
+def _workspace_tools() -> list[Tool]:
+    return [
         Tool(
             name="read_file",
             description="Read a text file from the current workspace.",
@@ -102,36 +112,8 @@ def get_builtin_tools() -> list[Tool]:
             handler=_glob_files,
         ),
         Tool(
-            name="glob_files",
-            description="Alias of glob. Find files by glob pattern inside the current workspace.",
-            parameters=object_schema(
-                {
-                    "pattern": {"type": "string", "description": "Glob pattern"},
-                    "limit": {"type": "number", "description": "Maximum results"},
-                },
-                ["pattern"],
-            ),
-            required_keys=["pattern"],
-            handler=_glob_files,
-        ),
-        Tool(
             name="grep",
             description="Search text in workspace files.",
-            parameters=object_schema(
-                {
-                    "pattern": {"type": "string", "description": "Regex or plain text pattern"},
-                    "path": {"type": "string", "description": "Optional path to search"},
-                    "regex": {"type": "boolean", "description": "Treat pattern as regex"},
-                    "limit": {"type": "number", "description": "Maximum matches"},
-                },
-                ["pattern"],
-            ),
-            required_keys=["pattern"],
-            handler=_grep,
-        ),
-        Tool(
-            name="grep_code",
-            description="Alias of grep. Search text in workspace files.",
             parameters=object_schema(
                 {
                     "pattern": {"type": "string", "description": "Regex or plain text pattern"},
@@ -184,26 +166,14 @@ def get_builtin_tools() -> list[Tool]:
             required_keys=["path"],
             handler=_get_file_info,
         ),
+    ]
+
+
+def _shell_and_web_tools() -> list[Tool]:
+    return [
         Tool(
             name="bash",
             description="Execute a shell command in the current workspace.",
-            parameters=object_schema(
-                {
-                    "command": {"type": "string", "description": "Shell command"},
-                    "timeout": {"type": "number", "description": "Timeout seconds"},
-                },
-                ["command"],
-            ),
-            required_keys=["command"],
-            handler=_bash,
-            is_read_only=False,
-            is_concurrency_safe=False,
-            danger_level="high",
-            requires_approval=True,
-        ),
-        Tool(
-            name="execute_command",
-            description="Alias of bash. Execute a shell command in the current workspace.",
             parameters=object_schema(
                 {
                     "command": {"type": "string", "description": "Shell command"},
@@ -246,6 +216,11 @@ def get_builtin_tools() -> list[Tool]:
             required_keys=["url"],
             handler=_web_fetch,
         ),
+    ]
+
+
+def _memory_and_skill_tools() -> list[Tool]:
+    return [
         Tool(
             name="save_memory",
             description=(
@@ -345,7 +320,6 @@ def get_builtin_tools() -> list[Tool]:
             requires_approval=True,
         ),
     ]
-    return tools
 
 
 # ---------------------------------------------------------------------------
@@ -576,11 +550,6 @@ async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolR
     return ToolResult(content, display_summary=f"Recalled {len(rows)} memories")
 
 
-# Public handler aliases used by direct tool tests.
-save_memory = _save_memory
-search_memory = _search_memory
-
-
 # ---------------------------------------------------------------------------
 # Handler: skill
 # ---------------------------------------------------------------------------
@@ -639,9 +608,6 @@ async def _save_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
         f'Saved skill "{skill.name}" in {scope} scope at {skill.path}.',
         display_summary=f"Saved skill {skill.name}",
     )
-
-
-load_skill = _load_skill
 
 
 # ---------------------------------------------------------------------------

@@ -28,54 +28,29 @@ MODEL_CONTEXT_WINDOWS = {
 def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
     provider = config.provider.lower()
     if provider == "deepseek":
-        base_url = config.base_url or DEEPSEEK_BASE_URL
-        context = config.context_window or MODEL_CONTEXT_WINDOWS.get(config.model.lower(), 64_000)
-        return OpenAICompatibleClient(
-            provider_name="deepseek",
-            model=config.model,
-            api_key=config.api_key,
-            base_url=base_url,
-            max_tokens=config.max_tokens,
-            temperature=config.temperature,
-            timeout=config.timeout,
-            max_context_window=context,
-            prompt_cache=True,
-        )
-    if provider in {"openai", "openai-compatible", "compatible"}:
-        context = config.context_window or 128_000
-        return OpenAICompatibleClient(
-            provider_name=provider,
-            model=config.model,
-            api_key=config.api_key,
-            base_url=config.base_url or OPENAI_BASE_URL,
-            max_tokens=config.max_tokens,
-            temperature=config.temperature,
-            timeout=config.timeout,
-            max_context_window=context,
-            prompt_cache=False,
-        )
-    if provider in PROVIDER_BASE_URLS:
-        context = config.context_window or MODEL_CONTEXT_WINDOWS.get(config.model.lower(), 128_000)
-        return OpenAICompatibleClient(
-            provider_name=provider,
-            model=config.model,
-            api_key=config.api_key,
-            base_url=config.base_url or PROVIDER_BASE_URLS[provider],
-            max_tokens=config.max_tokens,
-            temperature=config.temperature,
-            timeout=config.timeout,
-            max_context_window=context,
-            prompt_cache=False,
-        )
-    context = config.context_window or 64_000
+        default_base_url = DEEPSEEK_BASE_URL
+        default_context_window = 64_000
+    elif provider in {"openai", "openai-compatible", "compatible"}:
+        default_base_url = OPENAI_BASE_URL
+        default_context_window = 128_000
+    elif provider in PROVIDER_BASE_URLS:
+        default_base_url = PROVIDER_BASE_URLS[provider]
+        default_context_window = 128_000
+    else:
+        default_base_url = DEEPSEEK_BASE_URL
+        default_context_window = 64_000
+
+    context_window = config.context_window or MODEL_CONTEXT_WINDOWS.get(
+        config.model.lower(),
+        default_context_window,
+    )
     return OpenAICompatibleClient(
         provider_name=provider,
         model=config.model,
         api_key=config.api_key,
-        base_url=config.base_url or DEEPSEEK_BASE_URL,
+        base_url=config.base_url or default_base_url,
         max_tokens=config.max_tokens,
         temperature=config.temperature,
         timeout=config.timeout,
-        max_context_window=context,
-        prompt_cache=False,
+        max_context_window=context_window,
     )

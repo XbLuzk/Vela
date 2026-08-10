@@ -17,7 +17,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Overwrite, Send, interrupt
 
-from vela.agent.query import query
+from vela.agent.query import run_react_loop
 from vela.config import VelaConfig
 from vela.llm.base import LlmClient
 from vela.plan import ExecutionPlan, Planner, Task, TaskStatus, TaskType
@@ -349,7 +349,7 @@ class LangGraphPlanAgent:
         transcript: list[Message] = []
         error = ""
         try:
-            async for event in query(
+            async for event in run_react_loop(
                 llm_client=self.llm_client,
                 tool_registry=self.tool_registry,
                 system_prompt=self._task_system_prompt(plan, task),

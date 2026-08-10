@@ -250,22 +250,6 @@ class SkillRegistry:
             overwrite=True,
         )
 
-    def index_text(self, max_chars: int = 4000, max_skills: int = 20) -> str:
-        skills = self.enabled_skills()[:max_skills]
-        if not skills:
-            return ""
-        lines = [
-            "Available skills:",
-            "Load a skill with load_skill(name) when its description matches the task.",
-        ]
-        for skill in skills:
-            description = " ".join(skill.description.split())
-            if len(description) > 500:
-                description = description[:497] + "..."
-            lines.append(f"- {skill.name}: {description}")
-        text = "\n".join(lines)
-        return text[:max_chars]
-
     def _scope_root(self, scope: str) -> Path:
         if scope == "project":
             root = self.project_skill_root.resolve()

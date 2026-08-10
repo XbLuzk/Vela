@@ -146,3 +146,32 @@ def test_glm_startup_uses_official_zai_api_key_and_context(tmp_path, monkeypatch
     assert config.llm.api_key == "official-key"
     assert client.base_url == "https://open.bigmodel.cn/api/paas/v4"
     assert client.max_context_window == 200_000
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected_base_url", "expected_context_window"),
+    [
+        ("deepseek", "deepseek-chat", "https://api.deepseek.com/v1", 1_000_000),
+        ("openai", "gpt-4o", "https://api.openai.com/v1", 128_000),
+        ("kimi", "moonshot-v1", "https://api.moonshot.cn/v1", 128_000),
+        ("custom", "private-model", "https://api.deepseek.com/v1", 64_000),
+    ],
+)
+def test_llm_factory_preserves_provider_defaults(
+    tmp_path,
+    provider,
+    model,
+    expected_base_url,
+    expected_context_window,
+):
+    config = load_config(project_root=tmp_path, env={})
+    config.llm.provider = provider
+    config.llm.model = model
+    config.llm.base_url = None
+    config.llm.context_window = None
+
+    client = create_llm_client(config.llm)
+
+    assert client.provider_name == provider
+    assert client.base_url == expected_base_url
+    assert client.max_context_window == expected_context_window

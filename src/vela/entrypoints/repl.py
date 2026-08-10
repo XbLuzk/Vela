@@ -1,19 +1,17 @@
+"""Interactive startup, input loop, commands, and session persistence."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout.containers import Float, FloatContainer, Window
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from rich.console import Console
@@ -26,7 +24,15 @@ from vela.bootstrap import build_tool_registry
 from vela.branding import CLI_NAME, PRODUCT_NAME
 from vela.config import VelaConfig, config_to_public_dict
 from vela.entrypoints.model_selector import ModelSelectorState, run_model_selector
-from vela.image import ClipboardImageResult, grab_clipboard_image
+from vela.entrypoints.repl_ui import (
+    REPL_STYLE_RULES,
+    BorderedPromptSession,
+    PermissionMode,
+    PermissionModeController,
+    permission_key_bindings,
+    permission_mode_label,
+    prompt_message,
+)
 from vela.llm import create_llm_client
 from vela.llm.model_profiles import (
     DEFAULT_MODEL_PROFILES,
@@ -88,66 +94,23 @@ Other commands
   {commands}
 """
 
-REPL_STYLE_RULES = {
-    "prompt": "bold ansiblue",
-    "placeholder": "italic ansibrightblack",
-    "input.rule": "ansibrightblack",
-    "prompt.dim": "ansibrightblack",
-    "prompt.count.agents": "bold ansiblue",
-    "prompt.count.mcp": "bold ansiblue",
-    "prompt.count.skills": "bold ansiblue",
-    "prompt.tools": "bold ansiblue",
-    "toolbar.model": "bold",
-    "toolbar.ctx.bar": "ansigreen",
-    "toolbar.ctx.value": "",
-    "toolbar.cwd.value": "ansiblue",
-    "toolbar.mode.default": "bold ansigreen",
-    "toolbar.mode.auto": "bold ansiyellow",
-    "toolbar.task": "bold ansimagenta",
-    "toolbar.gap": "",
-}
 
+@dataclass(slots=True)
+class ReplRuntime:
+    """Objects shared by the interactive input loop and slash commands."""
 
-PermissionMode = Literal["default", "auto"]
-
-
-class _BorderedPromptSession(PromptSession):
-    def _create_layout(self):
-        layout = super()._create_layout()
-        layout.container = FloatContainer(
-            content=layout.container,
-            floats=[_input_border_float()],
-        )
-        return layout
-
-
-@dataclass
-class PermissionModeController:
-    """Apply one of the two interactive permission modes to the live config."""
-
+    console: Console
+    cwd: str
     config: VelaConfig
-    mode: PermissionMode = "default"
+    agent: Agent
+    registry: ToolRegistry
+    permission_mode: PermissionModeController
+    renderer: RichRenderer
+    active_session: ActiveSession
+    task_controller: InteractiveTaskController
 
-    def __post_init__(self) -> None:
-        self._default_hitl_mode = self.config.policy.hitl_mode
-        self._default_path_guard_enabled = self.config.policy.path_guard_enabled
-        self._default_command_guard_enabled = self.config.policy.command_guard_enabled
-        self.set(self.mode)
 
-    def set(self, mode: PermissionMode) -> PermissionMode:
-        self.mode = mode
-        if mode == "auto":
-            self.config.policy.hitl_mode = "never"
-            self.config.policy.path_guard_enabled = False
-            self.config.policy.command_guard_enabled = False
-        else:
-            self.config.policy.hitl_mode = self._default_hitl_mode
-            self.config.policy.path_guard_enabled = self._default_path_guard_enabled
-            self.config.policy.command_guard_enabled = self._default_command_guard_enabled
-        return self.mode
-
-    def toggle(self) -> PermissionMode:
-        return self.set("auto" if self.mode == "default" else "default")
+# Startup ---------------------------------------------------------------------
 
 
 async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> None:
@@ -203,8 +166,8 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
 
     history_path = Path.home() / ".vela" / "history" / "prompt_history.txt"
     history_path.parent.mkdir(parents=True, exist_ok=True)
-    session = _BorderedPromptSession(
-        message=lambda: _prompt_message(
+    session = BorderedPromptSession(
+        message=lambda: prompt_message(
             cwd=cwd,
             model=agent.llm_client.model_name,
             tools=tool_count,
@@ -219,7 +182,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         completer=WordCompleter(SLASH_COMMANDS, ignore_case=True),
         placeholder=[("class:placeholder", "Type a message, @image:<path>, or Ctrl+V")],
         style=Style.from_dict(REPL_STYLE_RULES),
-        key_bindings=_permission_key_bindings(
+        key_bindings=permission_key_bindings(
             permission_mode,
             task_controller,
             console=console,
@@ -229,35 +192,29 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         on_change=session.app.invalidate,
         on_error=lambda exc: console.print(f"[red]Task failed:[/red] {exc}"),
     )
+    runtime = ReplRuntime(
+        console=console,
+        cwd=cwd,
+        config=config,
+        agent=agent,
+        registry=registry,
+        permission_mode=permission_mode,
+        renderer=renderer,
+        active_session=active_session,
+        task_controller=task_controller,
+    )
 
     with patch_stdout(raw=True):
-        await _repl_loop(
-            session=session,
-            console=console,
-            cwd=cwd,
-            config=config,
-            agent=agent,
-            registry=registry,
-            permission_mode=permission_mode,
-            renderer=renderer,
-            active_session=active_session,
-            task_controller=task_controller,
-        )
+        await _repl_loop(session, runtime)
 
 
-async def _repl_loop(
-    *,
-    session: PromptSession,
-    console: Console,
-    cwd: str,
-    config: VelaConfig,
-    agent: Agent,
-    registry: ToolRegistry,
-    permission_mode: PermissionModeController,
-    renderer: RichRenderer,
-    active_session: ActiveSession,
-    task_controller: InteractiveTaskController,
-) -> None:
+# Input loop ------------------------------------------------------------------
+
+
+async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
+    console = runtime.console
+    active_session = runtime.active_session
+    task_controller = runtime.task_controller
     while True:
         try:
             user_input = await session.prompt_async()
@@ -302,18 +259,7 @@ async def _repl_loop(
             console.print("[yellow]当前任务仍在运行；使用 /cancel、Esc 或 Ctrl+C 取消。[/yellow]")
             continue
         if message.startswith("/"):
-            should_exit = await _handle_slash(
-                message,
-                console,
-                cwd,
-                config,
-                agent,
-                registry,
-                permission_mode,
-                renderer,
-                active_session,
-                task_controller,
-            )
+            should_exit = await _handle_slash(message, runtime)
             if should_exit:
                 active_session.close()
                 _print_session_warning(console, active_session)
@@ -321,8 +267,8 @@ async def _repl_loop(
             continue
         task_controller.start(
             _run_agent_with_session(
-                agent,
-                renderer,
+                runtime.agent,
+                runtime.renderer,
                 message,
                 active_session,
                 console,
@@ -331,6 +277,9 @@ async def _repl_loop(
             initial_state=TaskState.RUNNING,
             label=message,
         )
+
+
+# Agent execution and session persistence -------------------------------------
 
 
 async def _run_agent(
@@ -393,154 +342,191 @@ async def _run_events(
     renderer.newline()
 
 
-async def _handle_slash(
-    raw: str,
-    console: Console,
-    cwd: str,
-    config: VelaConfig,
-    agent: Agent,
-    registry: ToolRegistry,
-    permission_mode: PermissionModeController,
-    renderer: RichRenderer,
-    active_session: ActiveSession,
-    task_controller: InteractiveTaskController | None = None,
-) -> bool:
+async def _handle_slash(raw: str, runtime: ReplRuntime) -> bool:
     command, _, rest = raw.partition(" ")
     arg = rest.strip()
     if command in {"/exit", "/quit"}:
         return True
+
+    if command in {"/help", "/cancel", "/clear"}:
+        _handle_repl_command(command, runtime)
+    elif command in {"/sessions", "/resume"}:
+        _handle_session_command(command, arg, runtime)
+    elif command in {"/context", "/memory", "/save"}:
+        await _handle_context_command(command, arg, runtime)
+    elif command in {"/plan", "/team"}:
+        _handle_task_command(command, arg, runtime)
+    elif command in {
+        "/config",
+        "/tools",
+        "/hitl",
+        "/policy",
+        "/audit",
+        "/model",
+        "/usage",
+        "/skill",
+        "/mcp",
+    }:
+        await _handle_settings_command(command, arg, runtime)
+    else:
+        runtime.console.print(f"[red]Unknown command:[/red] {command}")
+    return False
+
+
+def _handle_repl_command(command: str, runtime: ReplRuntime) -> None:
     if command == "/help":
-        console.print(
+        runtime.console.print(
             INTERACTIVE_HELP.format(commands="  ".join(SLASH_COMMANDS)),
             markup=False,
         )
     elif command == "/cancel":
-        if task_controller is not None and task_controller.request_cancel():
-            console.print("[yellow]正在取消当前任务……[/yellow]")
+        if runtime.task_controller.request_cancel():
+            runtime.console.print("[yellow]正在取消当前任务……[/yellow]")
         else:
-            console.print("[dim]当前没有正在运行的任务。[/dim]")
-    elif command == "/clear":
-        agent.clear_history()
-        active_session.save(agent.history)
-        _print_session_warning(console, active_session)
-        console.clear()
-    elif command == "/sessions":
-        _sessions_command(console, active_session)
-    elif command == "/resume":
-        _resume_command(arg, console, agent, active_session)
-    elif command == "/context":
-        memories = MemoryManager(config.memory.long_term_db_path, scope=cwd).list(limit=5)
+            runtime.console.print("[dim]当前没有正在运行的任务。[/dim]")
+    else:
+        runtime.agent.clear_history()
+        runtime.active_session.save(runtime.agent.history)
+        _print_session_warning(runtime.console, runtime.active_session)
+        runtime.console.clear()
+
+
+def _handle_session_command(command: str, arg: str, runtime: ReplRuntime) -> None:
+    if command == "/sessions":
+        _sessions_command(runtime.console, runtime.active_session)
+    else:
+        _resume_command(arg, runtime.console, runtime.agent, runtime.active_session)
+
+
+async def _handle_context_command(command: str, arg: str, runtime: ReplRuntime) -> None:
+    config = runtime.config
+    if command == "/context":
+        memories = MemoryManager(config.memory.long_term_db_path, scope=runtime.cwd).list(limit=5)
         table = Table(title=f"{PRODUCT_NAME} Context")
         table.add_column("Field")
         table.add_column("Value")
-        table.add_row("cwd", cwd)
+        table.add_row("cwd", runtime.cwd)
         table.add_row("model", f"{config.llm.model} ({config.llm.provider})")
-        table.add_row("context window", str(agent.llm_client.max_context_window))
+        table.add_row("context window", str(runtime.agent.llm_client.max_context_window))
         table.add_row("memory", f"{len(memories)} recent entries")
-        table.add_row("tools", str(len(registry.list_names())))
-        console.print(table)
+        table.add_row("tools", str(len(runtime.registry.list_names())))
+        runtime.console.print(table)
     elif command == "/memory":
-        await _memory_command(arg, console, cwd, config)
-    elif command == "/save":
+        await _memory_command(arg, runtime.console, runtime.cwd, config)
+    else:
         if not arg:
-            console.print("[red]Usage:[/red] /save <fact>")
+            runtime.console.print("[red]Usage:[/red] /save <fact>")
         else:
             memory_id = MemoryManager(
                 config.memory.long_term_db_path,
-                scope=cwd,
+                scope=runtime.cwd,
                 max_entries=config.memory.max_long_term_entries,
                 max_content_length=config.memory.max_memory_chars,
             ).save(arg, source="manual", importance=0.8)
-            console.print(f"Saved memory #{memory_id}")
-    elif command == "/config":
-        console.print_json(json.dumps(config_to_public_dict(config), ensure_ascii=False))
+            runtime.console.print(f"Saved memory #{memory_id}")
+
+
+def _handle_task_command(command: str, arg: str, runtime: ReplRuntime) -> None:
+    if not arg:
+        runtime.console.print(f"[red]Usage:[/red] {command} <task>")
+        return
+    if command == "/plan":
+        _start_plan(arg, runtime)
+    else:
+        _start_team(arg, runtime)
+
+
+def _start_plan(arg: str, runtime: ReplRuntime) -> None:
+    resume_graph = arg in {"--resume", "resume", "继续"}
+    plan_agent = LangGraphPlanAgent(
+        llm_client=runtime.agent.llm_client,
+        tool_registry=runtime.registry,
+        config=runtime.config,
+        cwd=runtime.cwd,
+        approval_callback=runtime.agent.approval_callback,
+        plan_review_callback=runtime.task_controller.request_plan_review,
+        thread_id=runtime.active_session.current.id,
+        resume=resume_graph,
+    )
+    run = _run_delegated_with_session(
+        plan_agent,
+        "继续之前的计划" if resume_graph else arg,
+        runtime.agent,
+        runtime.active_session,
+        runtime.console,
+        runtime.task_controller,
+    )
+    runtime.task_controller.start(run, initial_state=TaskState.PLANNING, label=arg)
+
+
+def _start_team(arg: str, runtime: ReplRuntime) -> None:
+    try:
+        worker_mode, team_task = _parse_mode_argument(arg)
+    except ValueError as exc:
+        runtime.console.print(f"[red]{exc}[/red]")
+        return
+    orchestrator = AgentOrchestrator(
+        llm_client=runtime.agent.llm_client,
+        tool_registry=runtime.registry,
+        config=runtime.config,
+        cwd=runtime.cwd,
+        approval_callback=runtime.agent.approval_callback,
+        default_worker_mode=worker_mode,
+        plan_review_callback=runtime.task_controller.request_plan_review,
+    )
+    run = _run_delegated_with_session(
+        orchestrator,
+        team_task,
+        runtime.agent,
+        runtime.active_session,
+        runtime.console,
+        runtime.task_controller,
+    )
+    runtime.task_controller.start(
+        run,
+        initial_state=TaskState.PLANNING,
+        label=team_task,
+    )
+
+
+async def _handle_settings_command(command: str, arg: str, runtime: ReplRuntime) -> None:
+    config = runtime.config
+    if command == "/config":
+        runtime.console.print_json(json.dumps(config_to_public_dict(config), ensure_ascii=False))
     elif command == "/tools":
-        console.print("\n".join(registry.list_names()))
+        runtime.console.print("\n".join(runtime.registry.list_names()))
     elif command == "/hitl":
-        _hitl_command(arg, console, permission_mode)
+        _hitl_command(arg, runtime.console, runtime.permission_mode)
     elif command == "/policy":
-        console.print_json(json.dumps(config_to_public_dict(config)["policy"], ensure_ascii=False))
+        runtime.console.print_json(
+            json.dumps(config_to_public_dict(config)["policy"], ensure_ascii=False)
+        )
     elif command == "/audit":
         limit = int(arg or "20") if (arg or "20").isdigit() else 20
-        console.print_json(
+        runtime.console.print_json(
             json.dumps(AuditLog(config.policy.audit_log_path).tail(limit), ensure_ascii=False)
         )
-    elif command == "/plan":
-        if not arg:
-            console.print("[red]Usage:[/red] /plan <task>")
-        else:
-            resume_graph = arg in {"--resume", "resume", "继续"}
-            plan_agent = LangGraphPlanAgent(
-                llm_client=agent.llm_client,
-                tool_registry=registry,
-                config=config,
-                cwd=cwd,
-                approval_callback=agent.approval_callback,
-                plan_review_callback=(
-                    task_controller.request_plan_review if task_controller is not None else None
-                ),
-                thread_id=active_session.current.id,
-                resume=resume_graph,
-            )
-            run = _run_delegated_with_session(
-                plan_agent,
-                "继续之前的计划" if resume_graph else arg,
-                agent,
-                active_session,
-                console,
-                task_controller,
-            )
-            if task_controller is None:
-                await run
-            else:
-                task_controller.start(run, initial_state=TaskState.PLANNING, label=arg)
-    elif command == "/team":
-        if not arg:
-            console.print("[red]Usage:[/red] /team <task>")
-        else:
-            try:
-                worker_mode, team_task = _parse_mode_argument(arg)
-            except ValueError as exc:
-                console.print(f"[red]{exc}[/red]")
-                return False
-            orchestrator = AgentOrchestrator(
-                llm_client=agent.llm_client,
-                tool_registry=registry,
-                config=config,
-                cwd=cwd,
-                approval_callback=agent.approval_callback,
-                default_worker_mode=worker_mode,
-                plan_review_callback=(
-                    task_controller.request_plan_review if task_controller is not None else None
-                ),
-            )
-            run = _run_delegated_with_session(
-                orchestrator,
-                team_task,
-                agent,
-                active_session,
-                console,
-                task_controller,
-            )
-            if task_controller is None:
-                await run
-            else:
-                task_controller.start(
-                    run,
-                    initial_state=TaskState.PLANNING,
-                    label=team_task,
-                )
     elif command == "/model":
-        await _model_command(arg, console, cwd, config, agent, registry, renderer)
+        await _model_command(
+            arg,
+            runtime.console,
+            runtime.cwd,
+            config,
+            runtime.agent,
+            runtime.registry,
+            runtime.renderer,
+        )
     elif command == "/usage":
-        console.print_json(json.dumps(agent.last_usage.to_dict(), ensure_ascii=False))
+        runtime.console.print_json(
+            json.dumps(runtime.agent.last_usage.to_dict(), ensure_ascii=False)
+        )
     elif command == "/skill":
-        _skill_command(arg, console, cwd)
-    elif command == "/mcp":
-        console.print(f"Use `{CLI_NAME} mcp list` to inspect configured MCP servers.")
+        _skill_command(arg, runtime.console, runtime.cwd)
     else:
-        console.print(f"[red]Unknown command:[/red] {command}")
-    return False
+        runtime.console.print(f"Use `{CLI_NAME} mcp list` to inspect configured MCP servers.")
+
+
+# Slash command helpers -------------------------------------------------------
 
 
 def _sessions_command(console: Console, active_session: ActiveSession) -> None:
@@ -645,7 +631,7 @@ async def _memory_command(arg: str, console: Console, cwd: str, config: VelaConf
         count = manager.clear()
         console.print(f"Cleared {count} memories.")
     elif sub == "search":
-        rows = manager.search(rest)
+        rows = manager.recall(rest, mark_access=False)
         console.print("\n".join(f"#{row.id} {row.content}" for row in rows) or "(no matches)")
     elif sub == "stats":
         console.print_json(json.dumps(manager.stats(), ensure_ascii=False))
@@ -672,7 +658,10 @@ def _hitl_command(
     elif arg:
         console.print("[red]Usage:[/red] /hitl default|auto")
         return
-    console.print(f"Permission mode: {_permission_mode_label(permission_mode.mode)}")
+    console.print(f"Permission mode: {permission_mode_label(permission_mode.mode)}")
+
+
+# Model selection -------------------------------------------------------------
 
 
 async def _model_command(
@@ -876,6 +865,9 @@ def _skill_command(arg: str, console: Console, cwd: str) -> None:
     console.print("\n".join(lines) or "(no skills)")
 
 
+# Approval and small parsing helpers ------------------------------------------
+
+
 async def _approval_prompt(
     request: dict[str, Any],
     console: Console,
@@ -941,168 +933,3 @@ def _parse_mode_argument(
             raise ValueError("task text is required after --plan")
         return "plan", prompt
     return "react", value.strip()
-
-
-def _permission_key_bindings(
-    permission_mode: PermissionModeController,
-    task_controller: InteractiveTaskController | None = None,
-    *,
-    console: Console | None = None,
-    clipboard_grabber: Callable[[], ClipboardImageResult] = grab_clipboard_image,
-) -> KeyBindings:
-    bindings = KeyBindings()
-    clipboard_jobs: set[asyncio.Task[None]] = set()
-
-    @bindings.add(Keys.BackTab)
-    def _toggle_permission_mode(event) -> None:
-        permission_mode.toggle()
-        event.app.invalidate()
-
-    @bindings.add(Keys.Escape)
-    def _cancel_running_task(event) -> None:
-        if task_controller is not None and task_controller.request_cancel():
-            event.app.current_buffer.reset()
-            event.app.invalidate()
-
-    @bindings.add(Keys.ControlV)
-    def _paste_clipboard_image(event):
-        async def capture() -> None:
-            buffer = event.app.current_buffer
-            grabbed = await asyncio.to_thread(clipboard_grabber)
-            if event.app.is_done:
-                return
-            if grabbed.ok and grabbed.path is not None:
-                buffer.insert_text(f"@image:<{grabbed.path.resolve()}> ")
-            elif console is not None:
-                console.print(f"[yellow]Ctrl+V 抓图失败:[/yellow] {grabbed.error}")
-            event.app.invalidate()
-
-        job = asyncio.create_task(capture())
-        clipboard_jobs.add(job)
-        job.add_done_callback(clipboard_jobs.discard)
-        return job
-
-    @bindings.add(Keys.Enter)
-    async def _submit_after_clipboard(event) -> None:
-        if clipboard_jobs:
-            await asyncio.gather(*tuple(clipboard_jobs), return_exceptions=True)
-        if not event.app.is_done:
-            event.app.current_buffer.validate_and_handle()
-
-    return bindings
-
-
-def _permission_mode_label(mode: PermissionMode) -> str:
-    return "Auto (full access)" if mode == "auto" else "Default"
-
-
-def _prompt_message(
-    *,
-    cwd: str,
-    model: str,
-    tools: int,
-    agents_files: int,
-    mcp_servers: int,
-    skills: int,
-    stats: dict[str, Any] | None = None,
-    permission_mode: PermissionMode = "default",
-    task_state: TaskState | None = None,
-) -> list[tuple[str, str]]:
-    return [
-        ("class:prompt.count.agents", str(agents_files)),
-        ("class:prompt.dim", f" {_plural_label(agents_files, 'AGENTS.md file')} · "),
-        ("class:prompt.count.mcp", str(mcp_servers)),
-        ("class:prompt.dim", f" {_plural_label(mcp_servers, 'MCP server')} · "),
-        ("class:prompt.count.skills", str(skills)),
-        ("class:prompt.dim", f" {_plural_label(skills, 'skill')} · Tools "),
-        ("class:prompt.tools", str(tools)),
-        ("class:prompt.dim", "\n"),
-        *(
-            _bottom_toolbar(
-                cwd,
-                model,
-                stats,
-                permission_mode=permission_mode,
-                task_state=task_state,
-            )
-        ),
-        ("class:prompt.dim", "\n\n"),
-        ("class:prompt", "* "),
-    ]
-
-
-def _bottom_toolbar(
-    cwd: str,
-    model: str,
-    stats: dict[str, Any] | None = None,
-    *,
-    permission_mode: PermissionMode = "default",
-    task_state: TaskState | None = None,
-) -> list[tuple[str, str]]:
-    stats = stats or {}
-    has_usage = bool(stats.get("has_usage"))
-    context_ratio = float(stats.get("context_ratio") or 0)
-    context_text = _format_toolbar_percent(context_ratio) if has_usage else "0%"
-    toolbar = [
-        ("class:toolbar.model", model),
-        ("class:toolbar.gap", "    "),
-        ("class:toolbar.ctx.bar", _format_toolbar_bar(context_ratio if has_usage else 0)),
-        ("class:toolbar.gap", " "),
-        ("class:toolbar.ctx.value", context_text),
-        ("class:toolbar.gap", "  "),
-        ("class:toolbar.cwd.value", _shorten_home(cwd)),
-        ("class:toolbar.gap", "  "),
-        (
-            f"class:toolbar.mode.{permission_mode}",
-            _permission_mode_label(permission_mode),
-        ),
-        ("class:toolbar.gap", "  Shift+Tab"),
-    ]
-    if task_state is not None:
-        toolbar.extend(
-            [
-                ("class:toolbar.gap", "  Task "),
-                ("class:toolbar.task", task_state.value),
-            ]
-        )
-    return toolbar
-
-
-def _input_border_float() -> Float:
-    return Float(
-        content=Window(char="─", style="class:input.rule"),
-        left=2,
-        right=1,
-        height=1,
-        ycursor=True,
-    )
-
-
-def _plural_label(count: int, singular: str) -> str:
-    return singular if count == 1 else singular + "s"
-
-
-def _shorten_home(path: str) -> str:
-    home = str(Path.home())
-    if path == home:
-        return "~"
-    prefix = home + os.sep
-    if path.startswith(prefix):
-        return "~/" + path[len(prefix) :]
-    return path
-
-
-def _format_toolbar_bar(value: float, *, width: int = 12) -> str:
-    bounded = max(0.0, min(value, 1.0))
-    filled = round(bounded * width)
-    if bounded > 0 and filled == 0:
-        filled = 1
-    return "█" * filled + "░" * (width - filled)
-
-
-def _format_toolbar_percent(value: float) -> str:
-    if value <= 0:
-        return "0%"
-    if value < 0.01:
-        return "<1%"
-    return f"{value:.0%}"

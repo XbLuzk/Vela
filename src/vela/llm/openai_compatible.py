@@ -21,7 +21,6 @@ class OpenAICompatibleClient:
     temperature: float = 0.7
     timeout: float = 120.0
     max_context_window: int = 128_000
-    prompt_cache: bool = False
 
     @property
     def model_name(self) -> str:
@@ -164,27 +163,6 @@ class OpenAICompatibleClient:
                 height = metadata.get("height", "?")
                 text_parts.append(f"[Image omitted: {source}, {width}x{height}]")
         return "\n".join(text_parts)
-
-    async def list_models(self) -> list[str]:
-        """Fetch available model IDs from the API's /v1/models endpoint.
-
-        Returns an empty list if the API key is missing or the request fails.
-        """
-        if not self.api_key:
-            return []
-        headers = {
-            "authorization": f"Bearer {self.api_key}",
-            "user-agent": USER_AGENT,
-        }
-        url = self.base_url.rstrip("/") + "/models"
-        async with httpx.AsyncClient(timeout=15.0, http2=False) as client:
-            try:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                return sorted(item["id"] for item in data.get("data", []))
-            except Exception:
-                return []
 
     async def _parse_chunk(self, chunk: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         choices = chunk.get("choices") or []

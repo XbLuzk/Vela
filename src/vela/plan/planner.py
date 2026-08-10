@@ -34,15 +34,6 @@ class Planner:
         self.llm_client = llm_client
         self.last_usage = Usage()
 
-    async def create_plan(self, goal: str) -> ExecutionPlan:
-        plan: ExecutionPlan | None = None
-        async for event in self.stream_plan(goal):
-            if event.get("type") == "plan_created":
-                plan = event["plan"]
-        if plan is None:
-            raise ValueError("planner did not produce an execution plan")
-        return plan
-
     async def stream_plan(self, goal: str) -> AsyncIterator[dict[str, Any]]:
         """Create a plan while preserving provider reasoning and usage events."""
         self.last_usage = Usage()
@@ -72,16 +63,6 @@ class Planner:
                 raise event["error"]
 
         yield {"type": "plan_created", "plan": self.parse_plan(goal, text)}
-
-    async def replan(self, failed_plan: ExecutionPlan, failure_reason: str) -> ExecutionPlan:
-        completed = "\n".join(
-            f"- {task.id}: {task.description}"
-            for task in failed_plan.all_tasks()
-            if task.result and not task.error
-        )
-        return await self.create_plan(
-            f"{failed_plan.goal}\n失败原因：{failure_reason}\n已完成任务：\n{completed}"
-        )
 
     def parse_plan(self, goal: str, plan_json: str) -> ExecutionPlan:
         data = _parse_json_object(plan_json)
@@ -120,40 +101,10 @@ class Planner:
                 dep_id = id_mapping.get(str(raw_dep), str(raw_dep))
                 if dep_id in plan.tasks:
                     task.add_dependency(dep_id)
-                    plan.tasks[dep_id].add_dependent(task.id)
 
         if not plan.compute_execution_order():
             raise ValueError("plan contains a cyclic dependency")
         return plan
-
-
-async def _collect_text(
-    llm_client: LlmClient,
-    messages: list[Message],
-    *,
-    system_prompt: str,
-) -> str:
-    text, _usage = await _collect_text_and_usage(llm_client, messages, system_prompt=system_prompt)
-    return text
-
-
-async def _collect_text_and_usage(
-    llm_client: LlmClient,
-    messages: list[Message],
-    *,
-    system_prompt: str,
-) -> tuple[str, Usage]:
-    text = ""
-    usage = Usage()
-    async for event in llm_client.chat(messages, [], system_prompt=system_prompt):
-        event_type = event.get("type")
-        if event_type == "text_delta":
-            text += str(event.get("text") or "")
-        elif event_type == "usage":
-            usage = usage + Usage.from_mapping(event.get("usage") or {})
-        elif event_type == "error":
-            raise event["error"]
-    return text, usage
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:

@@ -212,13 +212,12 @@ def test_reviewer_rejection_after_retry_marks_step_failed(tmp_path, monkeypatch)
 
     class Worker:
         async def execute(self, task, context, *, mode):  # noqa: ARG002
-            return AgentMessage.result("worker", AgentRole.WORKER, "unverified result")
+            return AgentMessage.result("worker", "unverified result")
 
     class Reviewer:
         async def review(self, original_task, execution_result):  # noqa: ARG002
             return AgentMessage.result(
                 "reviewer",
-                AgentRole.REVIEWER,
                 '{"approved":false,"issues":["missing verification"]}',
             )
 

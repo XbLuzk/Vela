@@ -168,9 +168,6 @@ class RichRenderer:
             self._flush_markdown(title="Final Output")
             self._record_run_summary(event)
 
-    def markdown(self, text: str) -> None:
-        self.console.print(Markdown(text))
-
     def newline(self) -> None:
         self._flush_thinking()
         self._flush_markdown(title="Final Output")

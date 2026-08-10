@@ -1,16 +1,4 @@
-"""agent.py — Core terminal Agent inspired by Claude Code.
-
-Integrates LLM API, parses natural-language instructions, schedules command
-and file operations via the tool system, and generates streaming responses.
-
-Supports three execution modes:
-    - react  : Standard ReAct loop (thought → tool → observation → answer)
-    - plan   : Plan-then-execute with a DAG of sub-tasks
-    - team   : Multi-agent orchestrator (planner → workers → reviewer)
-
-All modes share the same streaming event protocol so callers can render
-progress incrementally.
-"""
+"""The stateful Agent used by both the CLI and interactive REPL."""
 
 from __future__ import annotations
 
@@ -19,7 +7,7 @@ from typing import Any, Literal
 
 from vela.agent.orchestrator import AgentOrchestrator
 from vela.agent.plan_graph import LangGraphPlanAgent
-from vela.agent.query import query
+from vela.agent.query import run_react_loop
 from vela.config import VelaConfig
 from vela.llm.base import LlmClient
 from vela.prompt import PromptAssembler
@@ -29,6 +17,7 @@ from vela.tools.registry import ToolRegistry
 from vela.types import Message, QueryResult, Usage
 
 AgentMode = Literal["react", "plan", "team"]
+WorkerMode = Literal["react", "plan"]
 
 
 class Agent:
@@ -63,7 +52,7 @@ class Agent:
         mode: AgentMode = "react",
         system_prompt: str | None = None,
         max_turns: int = 20,
-        max_plan_depth: int = 1,
+        worker_mode: WorkerMode = "react",
         plan_review_callback: (
             Callable[[Any], PlanReviewDecision | Awaitable[PlanReviewDecision]] | None
         ) = None,
@@ -75,11 +64,10 @@ class Agent:
         self.approval_callback = approval_callback
         self.mode = mode
         self.max_turns = max_turns
-        self.max_plan_depth = max_plan_depth
+        self.worker_mode = worker_mode
         self.plan_review_callback = plan_review_callback
         self.graph_thread_id: str | None = None
 
-        # Build the base system prompt from personality profile and config.
         self.system_prompt = (
             system_prompt
             or PromptAssembler(
@@ -91,14 +79,9 @@ class Agent:
             ).build_static()
         )
 
-        # Conversation state.
         self.history: list[Message] = []
         self.skill_context_buffer = SkillContextBuffer()
-
-        # Accumulated usage across all turns of the session.
         self.last_usage = Usage()
-
-        # Validate configuration.
         self._validate_config()
 
     # ------------------------------------------------------------------
@@ -106,43 +89,7 @@ class Agent:
     # ------------------------------------------------------------------
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
-        """Execute *message* and yield streaming events.
-
-        Events follow this protocol (``type`` field determines the shape):
-
-        ``text_delta``
-            {"type": "text_delta", "text": "..."}
-        ``thinking_delta``
-            {"type": "thinking_delta", "thinking": "..."}
-        ``tool_call``
-            {"type": "tool_call", "name": "...", "input": {...}}
-        ``tool_result``
-            {"type": "tool_result", "name": "...", "result": "...", "is_error": bool}
-        ``usage``
-            {"type": "usage", "usage": {...}}
-        ``turn_complete``
-            {"type": "turn_complete", "turn": int, "stop_reason": str}
-        ``context_compressed``
-            {"type": "context_compressed", "before_tokens": ..., "after_tokens": ...,
-             "summarized_messages": int}
-        ``plan_status``
-            {"type": "plan_status", "phase": "planning" | "execution"}
-        ``plan_review``
-            {"type": "plan_review"}; interactive callers should collect an
-            execute/modify/cancel decision through the configured review callback.
-        ``plan_task_started``
-            {"type": "plan_task_started", "task_id": str, "task_description": str}
-        ``plan_task_done``
-            {"type": "plan_task_done", "turns": int, "tokens": int}
-        ``error``
-            {"type": "error", "error": Exception}
-        ``done``
-            {"type": "done", "total_turns": int, "total_tokens": int,
-             "usage": {...}, "messages": [Message, ...]}
-
-        Cooperative cancellation raises ``asyncio.CancelledError`` instead of
-        emitting ``done``. Callers should persist ``history`` in a ``finally`` block.
-        """
+        """Run one request in the selected mode and yield progress events."""
         if self.mode == "plan":
             runner = self._run_plan
         elif self.mode == "team":
@@ -187,7 +134,7 @@ class Agent:
 
     async def _run_react(self, message: str) -> AsyncIterator[dict[str, Any]]:
         """Standard ReAct loop (the default and most common mode)."""
-        async for event in query(
+        async for event in run_react_loop(
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
             system_prompt=self.system_prompt,
@@ -236,7 +183,7 @@ class Agent:
             config=self.config,
             cwd=self.cwd,
             approval_callback=self.approval_callback,
-            default_worker_mode="react",
+            default_worker_mode=self.worker_mode,
             plan_review_callback=self.plan_review_callback,
         )
         self.history = [*previous_history, Message(role="user", content=message)]

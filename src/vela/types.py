@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 Role = Literal["system", "user", "assistant", "tool"]
-StopReason = Literal["end_turn", "tool_use", "max_tokens", "stop_sequence"]
 
 
 @dataclass(slots=True)
@@ -39,7 +38,7 @@ class Usage:
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any] | None) -> Usage:
-        """Normalize OpenAI/DeepSeek usage fields while preserving Vela's old names."""
+        """Normalize token fields returned by different LLM providers."""
         value = value or {}
         completion_details = value.get("completion_tokens_details")
         if not isinstance(completion_details, dict):

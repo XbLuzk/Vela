@@ -319,33 +319,10 @@ def test_repl_lists_and_resumes_a_persisted_session(tmp_path):
     agent = _FakeAgent()
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=160)
+    runtime = _repl_runtime(project, active, agent, console)
 
-    asyncio.run(
-        _handle_slash(
-            "/sessions",
-            console,
-            str(project),
-            None,
-            agent,
-            None,
-            None,
-            None,
-            active,
-        )
-    )
-    asyncio.run(
-        _handle_slash(
-            "/resume",
-            console,
-            str(project),
-            None,
-            agent,
-            None,
-            None,
-            None,
-            active,
-        )
-    )
+    asyncio.run(_handle_slash("/sessions", runtime))
+    asyncio.run(_handle_slash("/resume", runtime))
 
     output = stream.getvalue()
     assert "/sessions" in SLASH_COMMANDS
@@ -632,18 +609,14 @@ def test_ctrl_c_first_cancels_running_task_and_second_exits(tmp_path):
             initial_state=TaskState.RUNNING,
             label="long task",
         )
-        await _repl_loop(
-            session=prompt_session,
-            console=console,
-            cwd=str(tmp_path / "project"),
-            config=None,
-            agent=_FakeAgent(),
-            registry=None,
-            permission_mode=None,
-            renderer=None,
-            active_session=active,
+        runtime = _repl_runtime(
+            tmp_path / "project",
+            active,
+            _FakeAgent(),
+            console,
             task_controller=controller,
         )
+        await _repl_loop(prompt_session, runtime)
 
     asyncio.run(run())
 
@@ -690,20 +663,25 @@ def _run_session_command(raw, project, active):
     agent = _FakeAgent()
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=160)
-    asyncio.run(
-        _handle_slash(
-            raw,
-            console,
-            str(project),
-            None,
-            agent,
-            None,
-            None,
-            None,
-            active,
-        )
-    )
+    asyncio.run(_handle_slash(raw, _repl_runtime(project, active, agent, console)))
     return agent, stream.getvalue()
+
+
+def _repl_runtime(project, active, agent, console, *, task_controller=None):
+    config = load_config(project_root=project)
+    controller = task_controller or InteractiveTaskController()
+    registry = ToolRegistry()
+    return repl.ReplRuntime(
+        console=console,
+        cwd=str(project),
+        config=config,
+        agent=agent,
+        registry=registry,
+        permission_mode=repl.PermissionModeController(config),
+        renderer=RichRenderer(console),
+        active_session=active,
+        task_controller=controller,
+    )
 
 
 def _agent_with_client(tmp_path, client):

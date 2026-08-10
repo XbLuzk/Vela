@@ -1,3 +1,5 @@
+"""Shared ReAct loop for Agent, Plan workers, and Team workers."""
+
 from __future__ import annotations
 
 import json
@@ -16,7 +18,7 @@ from vela.tools.registry import ToolRegistry
 from vela.types import Message, Usage
 
 
-async def query(
+async def run_react_loop(
     *,
     llm_client: LlmClient,
     tool_registry: ToolRegistry,
@@ -32,6 +34,9 @@ async def query(
     allow_uncertain_tool_retry: bool = False,
     max_turns: int = 20,
 ) -> AsyncIterator[dict[str, Any]]:
+    """Run model -> tool -> model turns and stream progress events."""
+
+    # Build the request once. The loop below only appends model and tool messages.
     original_user_message = user_message
     user_message = _prepend_skill_candidates(user_message, cwd, config)
     user_message = _prepend_skill_context(user_message, skill_context_buffer)
@@ -42,7 +47,7 @@ async def query(
     _sync_history(history_sink, messages)
     tool_definitions = tool_registry.definitions()
     executor = ToolExecutor(tool_registry)
-    context = ToolContext(
+    tool_context = ToolContext(
         cwd=cwd,
         config=config,
         approval_callback=approval_callback,
@@ -58,7 +63,7 @@ async def query(
         provider=llm_client.provider_name,
     ).build_dynamic(original_user_message)
     effective_system_prompt = f"{system_prompt}\n\n{dynamic_prompt}".strip()
-    context_manager = ContextWindowManager(
+    window_manager = ContextWindowManager(
         ContextBudget(
             context_window=llm_client.max_context_window,
             max_output_tokens=config.llm.max_tokens,
@@ -72,17 +77,17 @@ async def query(
     )
 
     total_usage = Usage()
-    turn = 0
+    total_turns = 0
 
-    while turn < max_turns:
-        turn += 1
-        text = ""
+    for turn in range(1, max_turns + 1):
+        total_turns = turn
+        assistant_text = ""
         stop_reason = "end_turn"
         turn_usage = Usage()
-        tool_states: dict[int, dict[str, Any]] = {}
+        streamed_tool_calls: dict[int, dict[str, Any]] = {}
 
         if config.features.context_compression:
-            compression = context_manager.prepare(
+            compression = window_manager.prepare(
                 messages,
                 system_prompt=effective_system_prompt,
                 tool_definitions=tool_definitions,
@@ -105,13 +110,13 @@ async def query(
             event_type = event.get("type")
             if event_type == "text_delta":
                 delta = str(event.get("text") or "")
-                text += delta
+                assistant_text += delta
                 yield {"type": "text_delta", "text": delta}
             elif event_type == "thinking_delta":
                 delta = str(event.get("thinking") or "")
                 yield {"type": "thinking_delta", "thinking": delta}
             elif event_type == "tool_call_delta":
-                _merge_tool_delta(tool_states, event["tool_call"])
+                _merge_tool_delta(streamed_tool_calls, event["tool_call"])
             elif event_type == "message_end":
                 stop_reason = str(event.get("stop_reason") or "end_turn")
             elif event_type == "usage":
@@ -123,8 +128,12 @@ async def query(
                 return
 
         total_usage = total_usage + turn_usage
-        tool_calls = _finalize_tool_calls(tool_states)
-        assistant_message = Message(role="assistant", content=text, tool_calls=tool_calls)
+        tool_calls = _finalize_tool_calls(streamed_tool_calls)
+        assistant_message = Message(
+            role="assistant",
+            content=assistant_text,
+            tool_calls=tool_calls,
+        )
         messages.append(assistant_message)
         _sync_history(history_sink, messages)
         yield {"type": "turn_complete", "turn": turn, "stop_reason": stop_reason}
@@ -143,7 +152,7 @@ async def query(
         ]
         injection_target = load_skill_ids[-1] if load_skill_ids else ""
         result_messages: dict[str, Message] = {}
-        async for result in executor.execute_stream(tool_calls, context):
+        async for result in executor.execute_stream(tool_calls, tool_context):
             yield {
                 "type": "tool_result",
                 "name": _tool_name_by_id(tool_calls, result.tool_use_id or ""),
@@ -180,7 +189,7 @@ async def query(
 
     done_event: dict[str, Any] = {
         "type": "done",
-        "total_turns": turn,
+        "total_turns": total_turns,
         "total_tokens": total_usage.total_tokens,
         "usage": total_usage.to_dict(),
         "messages": messages,

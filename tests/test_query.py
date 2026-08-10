@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from vela.agent import QueryEngine
+from vela.agent import Agent
 from vela.config import load_config
 from vela.skill import SkillRegistry
 from vela.tools import ToolRegistry, get_builtin_tools
@@ -97,14 +97,14 @@ class UsageAndCompressionClient:
         }
 
 
-def test_query_engine_executes_tool_and_replays_result(tmp_path, monkeypatch):
+def test_agent_executes_tool_and_replays_result(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "note.txt").write_text("hello\n", encoding="utf-8")
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
-    engine = QueryEngine(
+    agent = Agent(
         llm_client=FakeClient(),
         tool_registry=registry,
         config=config,
@@ -112,7 +112,7 @@ def test_query_engine_executes_tool_and_replays_result(tmp_path, monkeypatch):
     )
 
     async def run() -> Any:
-        return await engine.ask_complete_async("read note")
+        return await agent.run_complete("read note")
 
     result = asyncio.run(run())
     assert result.text == "done"
@@ -132,14 +132,14 @@ def test_load_skill_is_injected_in_the_same_query_next_model_turn(tmp_path, monk
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
     client = SkillLoadingClient()
-    engine = QueryEngine(
+    agent = Agent(
         llm_client=client,
         tool_registry=registry,
         config=config,
         cwd=str(tmp_path),
     )
 
-    result = asyncio.run(engine.ask_complete_async("请使用 demo-skill 完成这个任务"))
+    result = asyncio.run(agent.run_complete("请使用 demo-skill 完成这个任务"))
 
     assert result.text == "skill applied"
     assert result.turns == 2
@@ -154,7 +154,7 @@ def test_query_integrates_context_compression_and_detailed_usage(tmp_path, monke
     config.memory.compression_reserve_tokens = 20
     config.memory.compression_threshold = 0.6
     client = UsageAndCompressionClient()
-    engine = QueryEngine(
+    agent = Agent(
         llm_client=client,
         tool_registry=ToolRegistry(),
         config=config,
@@ -169,7 +169,8 @@ def test_query_integrates_context_compression_and_detailed_usage(tmp_path, monke
             ]
         )
 
-    result = asyncio.run(engine.ask_complete_async("new request", history=history))
+    agent.history = history
+    result = asyncio.run(agent.run_complete("new request"))
 
     assert result.text == "compressed"
     assert client.saw_summary

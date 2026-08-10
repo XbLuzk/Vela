@@ -10,7 +10,7 @@ from vela.config import load_config
 from vela.skill import SkillContextBuffer, SkillMatcher, SkillRegistry, SkillStateStore
 from vela.tools import ToolRegistry, get_builtin_tools
 from vela.tools.base import ToolContext
-from vela.tools.builtins import load_skill
+from vela.tools.builtins import _load_skill
 from vela.tools.executor import ToolExecutor
 
 
@@ -64,7 +64,7 @@ def test_load_skill_pushes_body_into_context_buffer(tmp_path, monkeypatch):
     buffer = SkillContextBuffer()
     context = ToolContext(cwd=str(tmp_path), config=config, skill_context_buffer=buffer)
 
-    result = asyncio.run(load_skill({"name": "demo"}, context))
+    result = asyncio.run(_load_skill({"name": "demo"}, context))
 
     assert not result.is_error
     drained = buffer.drain()

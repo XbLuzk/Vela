@@ -9,7 +9,7 @@ import pytest
 from vela.config import load_config
 from vela.tools import ToolRegistry, get_builtin_tools
 from vela.tools.base import ToolContext
-from vela.tools.builtins import save_memory, search_memory
+from vela.tools.builtins import _save_memory, _search_memory
 from vela.tools.process import stop_subprocess
 
 
@@ -136,7 +136,7 @@ def test_memory_tools_save_metadata_and_recall_relevant_items(tmp_path, monkeypa
     context = ToolContext(cwd=str(tmp_path), config=config)
 
     saved = asyncio.run(
-        save_memory(
+        _save_memory(
             {
                 "content": "用户偏好用 uv 执行 Python 测试",
                 "kind": "preference",
@@ -145,7 +145,7 @@ def test_memory_tools_save_metadata_and_recall_relevant_items(tmp_path, monkeypa
             context,
         )
     )
-    recalled = asyncio.run(search_memory({"query": "怎么执行测试"}, context))
+    recalled = asyncio.run(_search_memory({"query": "怎么执行测试"}, context))
 
     assert not saved.is_error
     assert not recalled.is_error

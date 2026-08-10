@@ -121,12 +121,12 @@ def test_recall_handles_chinese_and_english_and_ignores_unrelated_memory(tmp_pat
     manager.save("The release checklist requires a clean build", importance=1.0)
 
     chinese = manager.recall("长期记忆怎么召回", limit=2)
-    english = manager.search("python memory deduplication", limit=2)
+    english = manager.recall("python memory deduplication", limit=2, mark_access=False)
 
     assert chinese[0].id == chinese_id
     assert chinese[0].access_count == 1
     assert english[0].id == english_id
-    assert manager.search("completely unrelated phrase") == []
+    assert manager.recall("completely unrelated phrase", mark_access=False) == []
 
 
 def test_recall_orders_equally_relevant_memories_by_importance(tmp_path):

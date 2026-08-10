@@ -159,11 +159,6 @@ class MemoryManager:
             ).fetchall()
         return [_entry_from_row(row) for row in rows]
 
-    def search(self, query: str, limit: int = 10) -> list[MemoryEntry]:
-        """Search without mutating access counters; kept compatible with the original API."""
-
-        return self.recall(query, limit=limit, mark_access=False)
-
     def recall(
         self,
         query: str,

@@ -34,7 +34,7 @@ import typer
 from rich.console import Console
 
 from vela import __version__
-from vela.agent import QueryEngine
+from vela.agent import Agent
 from vela.bootstrap import build_tool_registry
 from vela.branding import CLI_NAME, PRODUCT_NAME
 from vela.config import get_config_paths, load_config
@@ -267,19 +267,16 @@ async def _run_prompt(
     if manager and manager.last_errors:
         for name, error in manager.last_errors.items():
             typer.echo(f"MCP server {name} failed to load: {error}", err=True)
-    engine = QueryEngine(
+    agent = Agent(
         llm_client=create_llm_client(config.llm),
         tool_registry=registry,
         config=config,
         cwd=cwd,
+        mode=mode,
+        worker_mode=worker_mode,
     )
     try:
-        if mode == "plan":
-            result = await engine.plan_complete_async(prompt)
-        elif mode == "team":
-            result = await engine.team_complete_async(prompt, worker_mode=worker_mode)
-        else:
-            result = await engine.ask_complete_async(prompt)
+        result = await agent.run_complete(prompt)
     except Exception as exc:  # noqa: BLE001 - CLI should report model/config errors cleanly
         typer.echo(f"Fatal error: {exc}", err=True)
         raise typer.Exit(1) from exc

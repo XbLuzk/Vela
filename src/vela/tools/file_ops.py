@@ -55,12 +55,6 @@ def skip_file(path: Path) -> bool:
         return True
 
 
-def _line_numbered(content: str, offset: int = 1) -> str:
-    """Prefix each line with its 1-based line number, offset by *offset*."""
-    lines = content.splitlines()
-    return "\n".join(f"{idx + offset}: {line}" for idx, line in enumerate(lines))
-
-
 # ---------------------------------------------------------------------------
 # Read
 # ---------------------------------------------------------------------------
@@ -93,24 +87,6 @@ def read_file(
     numbered = "\n".join(f"{idx + offset}: {line}" for idx, line in enumerate(selected))
     rel = _relative_to(resolved, cwd)
     return FileOpResult(numbered, display_summary=f"Read {rel}")
-
-
-def read_file_raw(
-    cwd: str,
-    path: str,
-    *,
-    path_guard_enabled: bool = True,
-) -> FileOpResult:
-    """Return raw (un-numbered) file content — useful for LLM consumption."""
-    resolved = resolve_path(cwd, path, path_guard_enabled)
-    if not resolved.is_file():
-        return FileOpResult(f"Not a file: {resolved}", is_error=True)
-    try:
-        content = resolved.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        return FileOpResult(f"Failed to read {resolved}: {exc}", is_error=True)
-    rel = _relative_to(resolved, cwd)
-    return FileOpResult(content, display_summary=f"Read {rel}")
 
 
 # ---------------------------------------------------------------------------

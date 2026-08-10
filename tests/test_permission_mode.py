@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from vela.config import load_config
-from vela.entrypoints.repl import PermissionModeController
+from vela.entrypoints.repl_ui import PermissionModeController
 from vela.tools.base import Tool, ToolContext, ToolResult, object_schema
 from vela.tools.executor import ToolExecutor
 from vela.tools.registry import ToolRegistry

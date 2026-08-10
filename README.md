@@ -27,6 +27,9 @@ Vela 是一个运行在终端中的 AI Agent。它能够读取和修改文件、
 MCP 工具、管理长期记忆，并通过可恢复的 Session、LangGraph Checkpoint 和工具执行日志处理
 长任务与中断恢复。
 
+第一次阅读 Python Agent 项目，可以从 [Vela 代码阅读路线](docs/code-guide.md) 开始，只跟普通
+ReAct 请求的五步主链路，再逐步进入 Plan、Team、Session 和终端 UI。
+
 ## 核心能力
 
 | 能力 | 说明 |
@@ -223,9 +226,9 @@ Vela 内置的主要工具：
 
 | 类别 | 工具 |
 | --- | --- |
-| 文件 | `read_file`、`write_file`、`list_dir`、`glob_files` |
-| 搜索 | `grep_code` |
-| 命令 | `execute_command` |
+| 文件 | `read_file`、`write_file`、`list_dir`、`glob` |
+| 搜索 | `grep` |
+| 命令 | `bash` |
 | 联网 | `web_search`、`web_fetch` |
 | 记忆 | `save_memory`、`search_memory` |
 | Skill | `load_skill`、`save_skill` |

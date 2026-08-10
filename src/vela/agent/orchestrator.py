@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
-from vela.agent.query import query
+from vela.agent.query import run_react_loop
 from vela.config import VelaConfig
 from vela.llm.base import LlmClient
 from vela.prompt import PromptAssembler
@@ -33,9 +33,6 @@ class AgentRole(StrEnum):
 class AgentMessageType(StrEnum):
     TASK = "TASK"
     RESULT = "RESULT"
-    FEEDBACK = "FEEDBACK"
-    APPROVAL = "APPROVAL"
-    REJECTION = "REJECTION"
     ERROR = "ERROR"
 
 
@@ -54,7 +51,6 @@ class AgentRunMode(StrEnum):
 @dataclass(slots=True)
 class AgentMessage:
     from_agent: str
-    from_role: AgentRole | None
     content: str
     type: AgentMessageType
     usage: Usage = field(default_factory=Usage)
@@ -62,29 +58,27 @@ class AgentMessage:
 
     @classmethod
     def task(cls, from_agent: str, content: str) -> AgentMessage:
-        return cls(from_agent, None, content, AgentMessageType.TASK)
+        return cls(from_agent, content, AgentMessageType.TASK)
 
     @classmethod
     def result(
         cls,
         from_agent: str,
-        role: AgentRole,
         content: str,
         usage: Usage | None = None,
         turns: int = 0,
     ) -> AgentMessage:
-        return cls(from_agent, role, content, AgentMessageType.RESULT, usage or Usage(), turns)
+        return cls(from_agent, content, AgentMessageType.RESULT, usage or Usage(), turns)
 
     @classmethod
     def error(
         cls,
         from_agent: str,
-        role: AgentRole,
         content: str,
         usage: Usage | None = None,
         turns: int = 0,
     ) -> AgentMessage:
-        return cls(from_agent, role, content, AgentMessageType.ERROR, usage or Usage(), turns)
+        return cls(from_agent, content, AgentMessageType.ERROR, usage or Usage(), turns)
 
 
 @dataclass(slots=True)
@@ -168,7 +162,7 @@ class SubAgent:
         usage = Usage()
         turns = 0
         try:
-            async for event in query(
+            async for event in run_react_loop(
                 llm_client=self.llm_client,
                 tool_registry=self.tool_registry,
                 system_prompt=self._system_prompt(),
@@ -192,15 +186,14 @@ class SubAgent:
                 elif event.get("type") == "error":
                     raise event["error"]
         except Exception as exc:  # noqa: BLE001
-            return AgentMessage.error(self.name, self.role, str(exc), usage, turns)
+            return AgentMessage.error(self.name, str(exc), usage, turns)
         result = text.strip() or "\n".join(item for item in tool_results if item).strip()
-        return AgentMessage.result(self.name, self.role, result, usage, turns)
+        return AgentMessage.result(self.name, result, usage, turns)
 
     async def _execute_plan(self, content: str, *, plan_depth: int) -> AgentMessage:
         if plan_depth >= self.max_plan_depth:
             return AgentMessage.error(
                 self.name,
-                self.role,
                 f"nested Plan depth limit ({self.max_plan_depth}) reached",
             )
         from vela.agent.plan_graph import LangGraphPlanAgent
@@ -225,12 +218,12 @@ class SubAgent:
                 elif event.get("type") == "error":
                     raise event["error"]
         except Exception as exc:  # noqa: BLE001
-            return AgentMessage.error(self.name, self.role, str(exc), usage, turns)
+            return AgentMessage.error(self.name, str(exc), usage, turns)
         self.history = [
             Message(role="user", content=content),
             Message(role="assistant", content=text),
         ]
-        return AgentMessage.result(self.name, self.role, text.strip(), usage, turns)
+        return AgentMessage.result(self.name, text.strip(), usage, turns)
 
     async def _execute_without_tools(self, content: str) -> AgentMessage:
         text = ""
@@ -249,9 +242,9 @@ class SubAgent:
                 elif event.get("type") == "error":
                     raise event["error"]
         except Exception as exc:  # noqa: BLE001
-            return AgentMessage.error(self.name, self.role, str(exc), usage, 1)
+            return AgentMessage.error(self.name, str(exc), usage, 1)
         self.history = [*messages, Message(role="assistant", content=text)]
-        return AgentMessage.result(self.name, self.role, text, usage, 1)
+        return AgentMessage.result(self.name, text, usage, 1)
 
     def _system_prompt(self) -> str:
         base = PromptAssembler(

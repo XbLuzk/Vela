@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from vela.agent import QueryEngine
+from vela.agent import Agent
 from vela.config import load_config
 from vela.memory import MemoryManager
 from vela.prompt import PromptAssembler
@@ -44,20 +44,20 @@ def test_dynamic_prompt_recall_is_rebuilt_for_each_request(tmp_path, monkeypatch
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     client = CapturingClient()
-    engine = QueryEngine(
+    agent = Agent(
         llm_client=client,
         tool_registry=ToolRegistry(),
         config=config,
         cwd=str(tmp_path),
     )
 
-    asyncio.run(engine.ask_complete_async("第一次请求，不涉及测试偏好"))
+    asyncio.run(agent.run_complete("第一次请求，不涉及测试偏好"))
     MemoryManager(config.memory.long_term_db_path, scope=str(tmp_path)).save(
         "用户偏好使用 uv run python -m pytest 执行测试",
         kind="preference",
         importance=0.9,
     )
-    asyncio.run(engine.ask_complete_async("我偏好怎么执行测试？"))
+    asyncio.run(agent.run_complete("我偏好怎么执行测试？"))
 
     assert len(client.system_prompts) == 2
     assert "Current time" in client.system_prompts[1]

@@ -25,11 +25,6 @@ class PromptAssembler:
         self.model = model
         self.provider = provider
 
-    def build(self) -> str:
-        """Backward-compatible alias for the stable prompt prefix."""
-
-        return self.build_static()
-
     def build_static(self) -> str:
         parts = [
             f"You are {PRODUCT_NAME}, a powerful AI coding assistant running in a terminal.",
