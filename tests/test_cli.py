@@ -29,3 +29,13 @@ def test_resume_flag_is_rejected_for_single_prompt(tmp_path):
     assert result.exit_code != 0
     assert "available only for interactive" in result.output
     assert "sessions" in result.output
+
+
+def test_team_mode_is_rejected(tmp_path):
+    result = CliRunner().invoke(
+        cli.app,
+        ["--prompt", "hello", "--mode", "team", "--cwd", str(tmp_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "mode must be react or plan" in result.output

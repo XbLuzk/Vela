@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
 from collections import OrderedDict
@@ -13,12 +12,9 @@ from pathlib import Path
 class Skill:
     name: str
     description: str
-    path: Path
     content: str
     source: str = "project"
-    version: str = ""
     tags: list[str] = field(default_factory=list)
-    enabled: bool = True
 
     @property
     def body(self) -> str:
@@ -26,10 +22,10 @@ class Skill:
 
 
 class SkillMatcher:
-    """Rank enabled skills against a user request using lightweight lexical signals."""
+    """Rank available skills against a user request using lightweight lexical signals."""
 
     def __init__(self, skills: Iterable[Skill]):
-        self.skills = tuple(skill for skill in skills if skill.enabled)
+        self.skills = tuple(skills)
 
     def match(self, query: str, *, top_k: int = 5) -> list[Skill]:
         if top_k <= 0 or not query.strip():
@@ -89,43 +85,6 @@ class SkillContextBuffer:
     def is_empty(self) -> bool:
         return not self._items
 
-    def size(self) -> int:
-        return len(self._items)
-
-
-class SkillStateStore:
-    def __init__(self, path: str | Path | None = None):
-        self.path = Path(path or Path.home() / ".vela" / "skills.json").expanduser()
-
-    def disabled(self) -> set[str]:
-        if not self.path.exists():
-            return set()
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return set()
-        values = data.get("disabled") if isinstance(data, dict) else None
-        if not isinstance(values, list):
-            return set()
-        return {str(item) for item in values if str(item).strip()}
-
-    def disable(self, name: str) -> None:
-        values = self.disabled()
-        values.add(name)
-        self._write(values)
-
-    def enable(self, name: str) -> None:
-        values = self.disabled()
-        values.discard(name)
-        self._write(values)
-
-    def _write(self, disabled: set[str]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps({"disabled": sorted(disabled)}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-
 
 class SkillRegistry:
     """Load SKILL.md files from built-in, user, and project locations."""
@@ -136,145 +95,27 @@ class SkillRegistry:
         *,
         builtin_root: str | Path | None = None,
         user_root: str | Path | None = None,
-        state_store: SkillStateStore | None = None,
     ):
         self.project_root = Path(project_root).resolve()
         package_root = Path(__file__).resolve().parents[1]
         self.builtin_root = Path(builtin_root or package_root / "builtin_skills")
         self.user_root = Path(user_root or Path.home() / ".vela" / "skills")
         self.project_skill_root = self.project_root / ".vela" / "skills"
-        self.state_store = state_store or SkillStateStore()
         self._skills: dict[str, Skill] | None = None
 
-    def reload(self) -> None:
-        self._skills = None
-
     def list(self) -> list[Skill]:
-        return self.enabled_skills()
-
-    def all_skills(self) -> list[Skill]:
         skills = self._load_all()
         return [skills[name] for name in sorted(skills)]
 
-    def enabled_skills(self) -> list[Skill]:
-        return [skill for skill in self.all_skills() if skill.enabled]
-
-    def load(self, name: str, *, include_disabled: bool = False) -> Skill | None:
-        skill = self._load_all().get(name)
-        if not skill:
-            return None
-        if not include_disabled and not skill.enabled:
-            return None
-        return skill
-
-    def enable(self, name: str) -> bool:
-        if not self.load(name, include_disabled=True):
-            return False
-        self.state_store.enable(name)
-        self.reload()
-        return True
-
-    def disable(self, name: str) -> bool:
-        if not self.load(name, include_disabled=True):
-            return False
-        self.state_store.disable(name)
-        self.reload()
-        return True
+    def load(self, name: str) -> Skill | None:
+        return self._load_all().get(name)
 
     def match(self, query: str, *, top_k: int = 5) -> list[Skill]:
-        return SkillMatcher(self.enabled_skills()).match(query, top_k=top_k)
-
-    def create(
-        self,
-        name: str,
-        *,
-        description: str,
-        body: str,
-        scope: str = "project",
-        version: str = "1.0.0",
-        tags: list[str] | None = None,
-        overwrite: bool = False,
-    ) -> Skill:
-        slug = _validate_skill_slug(name)
-        description = description.strip()
-        body = body.strip()
-        if not description:
-            raise ValueError("skill description must not be empty")
-        if not body:
-            raise ValueError("skill body must not be empty")
-
-        path = self._skill_path(slug, scope)
-        if path.exists() and not overwrite:
-            raise FileExistsError(f'skill "{slug}" already exists in {scope} scope')
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            _render_skill_file(
-                name=slug,
-                description=description,
-                body=body,
-                version=version,
-                tags=tags or [],
-            ),
-            encoding="utf-8",
-        )
-        self.reload()
-        skill = self._load_skill_file(path, scope, self.state_store.disabled())
-        if not skill:  # pragma: no cover - the file was just written successfully
-            raise OSError(f"failed to load newly written skill: {path}")
-        return skill
-
-    def update(
-        self,
-        name: str,
-        *,
-        description: str | None = None,
-        body: str | None = None,
-        scope: str = "project",
-        version: str | None = None,
-        tags: list[str] | None = None,
-    ) -> Skill:
-        slug = _validate_skill_slug(name)
-        path = self._skill_path(slug, scope)
-        if not path.is_file():
-            raise FileNotFoundError(f'skill "{slug}" does not exist in {scope} scope')
-        existing = self._load_skill_file(path, scope, self.state_store.disabled())
-        if not existing:
-            raise ValueError(f'skill "{slug}" could not be parsed')
-        return self.create(
-            slug,
-            description=description if description is not None else existing.description,
-            body=body if body is not None else existing.body,
-            scope=scope,
-            version=version if version is not None else existing.version,
-            tags=tags if tags is not None else existing.tags,
-            overwrite=True,
-        )
-
-    def _scope_root(self, scope: str) -> Path:
-        if scope == "project":
-            root = self.project_skill_root.resolve()
-            try:
-                root.relative_to(self.project_root)
-            except ValueError as exc:
-                raise ValueError("project skill root must stay inside the project") from exc
-            return root
-        if scope == "user":
-            return self.user_root.expanduser().resolve()
-        raise ValueError('skill scope must be "project" or "user"')
-
-    def _skill_path(self, name: str, scope: str) -> Path:
-        root = self._scope_root(scope)
-        path = root / name / "SKILL.md"
-        try:
-            path.resolve().relative_to(root)
-        except ValueError as exc:
-            raise ValueError("skill path must stay inside its scope root") from exc
-        return path
+        return SkillMatcher(self.list()).match(query, top_k=top_k)
 
     def _load_all(self) -> dict[str, Skill]:
         if self._skills is not None:
             return self._skills
-        disabled = self.state_store.disabled()
         skills: dict[str, Skill] = {}
         for source, root in [
             ("builtin", self.builtin_root),
@@ -284,13 +125,13 @@ class SkillRegistry:
             if not root.exists():
                 continue
             for skill_file in sorted(root.glob("*/SKILL.md")):
-                skill = self._load_skill_file(skill_file, source, disabled)
+                skill = self._load_skill_file(skill_file, source)
                 if skill:
                     skills[skill.name] = skill
         self._skills = skills
         return skills
 
-    def _load_skill_file(self, path: Path, source: str, disabled: set[str]) -> Skill | None:
+    def _load_skill_file(self, path: Path, source: str) -> Skill | None:
         try:
             content = path.read_text(encoding="utf-8")
         except OSError:
@@ -302,12 +143,9 @@ class SkillRegistry:
         return Skill(
             name=name,
             description=description,
-            version=metadata.get("version") or "",
             tags=tags,
             source=source,
-            path=path,
             content=content,
-            enabled=name not in disabled,
         )
 
 
@@ -356,42 +194,9 @@ def _parse_tags(raw: str) -> list[str]:
     return [item.strip().strip('"').strip("'") for item in value.split(",") if item.strip()]
 
 
-_SKILL_SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 _ASCII_TERM = re.compile(r"[a-z0-9]+")
 _CJK_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 _MATCH_STOPWORDS = {"and", "for", "from", "the", "this", "use", "with"}
-
-
-def _validate_skill_slug(name: str) -> str:
-    if not isinstance(name, str) or not _SKILL_SLUG.fullmatch(name):
-        raise ValueError(
-            "skill name must be a lowercase slug using letters, numbers, hyphens, or underscores"
-        )
-    return name
-
-
-def _render_skill_file(
-    *,
-    name: str,
-    description: str,
-    body: str,
-    version: str,
-    tags: list[str],
-) -> str:
-    clean_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
-    lines = ["---", f"name: {name}", "description: |"]
-    lines.extend(f"  {line}" for line in description.splitlines())
-    lines.extend(
-        [
-            f"version: {json.dumps(str(version), ensure_ascii=False)}",
-            f"tags: {json.dumps(clean_tags, ensure_ascii=False)}",
-            "---",
-            "",
-            body.rstrip(),
-            "",
-        ]
-    )
-    return "\n".join(lines)
 
 
 def _normalize_match_text(value: str) -> str:

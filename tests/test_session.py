@@ -400,16 +400,12 @@ def test_agent_retains_user_message_when_cancelled(tmp_path, monkeypatch):
     assert "keep cancelled request" in str(agent.history[-1].content)
 
 
-@pytest.mark.parametrize(
-    ("mode", "delegate_name"),
-    [("plan", "LangGraphPlanAgent"), ("team", "AgentOrchestrator")],
-)
-def test_agent_delegated_modes_preserve_prior_history(tmp_path, monkeypatch, mode, delegate_name):
+def test_agent_plan_mode_preserves_prior_history(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     delegated = _FakeDelegatedAgent()
-    monkeypatch.setattr(agent_module, delegate_name, lambda **kwargs: delegated)
+    monkeypatch.setattr(agent_module, "LangGraphPlanAgent", lambda **kwargs: delegated)
     agent = _agent_with_client(tmp_path, _ErrorClient())
-    agent.mode = mode
+    agent.mode = "plan"
     agent.history = [Message(role="assistant", content="earlier answer")]
 
     async def run():
@@ -424,13 +420,7 @@ def test_agent_delegated_modes_preserve_prior_history(tmp_path, monkeypatch, mod
     ]
 
 
-@pytest.mark.parametrize(
-    ("mode", "delegate_name"),
-    [("plan", "LangGraphPlanAgent"), ("team", "AgentOrchestrator")],
-)
-def test_agent_forwards_plan_review_callback_to_delegated_modes(
-    tmp_path, monkeypatch, mode, delegate_name
-):
+def test_agent_forwards_plan_review_callback_to_plan_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     captured = {}
     delegated = _FakeDelegatedAgent()
@@ -439,7 +429,7 @@ def test_agent_forwards_plan_review_callback_to_delegated_modes(
         captured.update(kwargs)
         return delegated
 
-    monkeypatch.setattr(agent_module, delegate_name, create_delegate)
+    monkeypatch.setattr(agent_module, "LangGraphPlanAgent", create_delegate)
     callback = lambda plan: None  # noqa: E731, ARG005 - identity assertion only
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
@@ -448,7 +438,7 @@ def test_agent_forwards_plan_review_callback_to_delegated_modes(
         tool_registry=ToolRegistry(),
         config=config,
         cwd=str(tmp_path),
-        mode=mode,
+        mode="plan",
         plan_review_callback=callback,
     )
 

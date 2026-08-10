@@ -49,7 +49,7 @@ async def resolve_plan_review(
     callback: Callable[[Any], PlanReviewDecision | Awaitable[PlanReviewDecision]] | None,
     plan: Any,
 ) -> PlanReviewDecision:
-    """Resolve and validate the shared Plan/Team review contract."""
+    """Resolve and validate the Plan review contract."""
 
     if callback is None:
         return PlanReviewDecision.execute()

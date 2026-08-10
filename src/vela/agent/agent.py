@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
-from vela.agent.orchestrator import AgentOrchestrator
 from vela.agent.plan_graph import LangGraphPlanAgent
 from vela.agent.query import run_react_loop
 from vela.config import VelaConfig
@@ -16,8 +15,7 @@ from vela.task_control import PlanReviewDecision
 from vela.tools.registry import ToolRegistry
 from vela.types import Message, QueryResult, Usage
 
-AgentMode = Literal["react", "plan", "team"]
-WorkerMode = Literal["react", "plan"]
+AgentMode = Literal["react", "plan"]
 
 
 class Agent:
@@ -52,7 +50,6 @@ class Agent:
         mode: AgentMode = "react",
         system_prompt: str | None = None,
         max_turns: int = 20,
-        worker_mode: WorkerMode = "react",
         plan_review_callback: (
             Callable[[Any], PlanReviewDecision | Awaitable[PlanReviewDecision]] | None
         ) = None,
@@ -64,7 +61,6 @@ class Agent:
         self.approval_callback = approval_callback
         self.mode = mode
         self.max_turns = max_turns
-        self.worker_mode = worker_mode
         self.plan_review_callback = plan_review_callback
         self.graph_thread_id: str | None = None
 
@@ -90,12 +86,7 @@ class Agent:
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
         """Run one request in the selected mode and yield progress events."""
-        if self.mode == "plan":
-            runner = self._run_plan
-        elif self.mode == "team":
-            runner = self._run_team
-        else:
-            runner = self._run_react
+        runner = self._run_plan if self.mode == "plan" else self._run_react
 
         async for event in runner(message):
             yield event
@@ -174,31 +165,14 @@ class Agent:
                 self.last_usage = Usage.from_mapping(event.get("usage") or {})
             yield event
 
-    async def _run_team(self, message: str) -> AsyncIterator[dict[str, Any]]:
-        """Multi-agent team mode: planner → parallel workers → reviewer."""
-        previous_history = list(self.history)
-        orchestrator = AgentOrchestrator(
-            llm_client=self.llm_client,
-            tool_registry=self.tool_registry,
-            config=self.config,
-            cwd=self.cwd,
-            approval_callback=self.approval_callback,
-            default_worker_mode=self.worker_mode,
-            plan_review_callback=self.plan_review_callback,
-        )
-        self.history = [*previous_history, Message(role="user", content=message)]
-        async for event in orchestrator.run(message):
-            if event.get("type") == "done":
-                self.history = [*previous_history, *list(event.get("messages") or [])]
-                self.last_usage = Usage.from_mapping(event.get("usage") or {})
-            yield event
-
     # ------------------------------------------------------------------
     # Configuration helpers
     # ------------------------------------------------------------------
 
     def _validate_config(self) -> None:
         """Raise early if the configuration is obviously wrong."""
+        if self.mode not in {"react", "plan"}:
+            raise ValueError("Agent mode must be react or plan.")
         if not self.config.llm.api_key:
             raise ValueError(
                 "LLM API key is not configured. "

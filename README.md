@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  ReAct · LangGraph Plan · Multi-Agent · MCP · Skills · Memory · Multimodal
+  ReAct · LangGraph Plan · MCP · Skills · Memory · Multimodal
 </p>
 
 <p align="center">
@@ -28,13 +28,13 @@ MCP 工具、管理长期记忆，并通过可恢复的 Session、LangGraph Chec
 长任务与中断恢复。
 
 第一次阅读 Python Agent 项目，可以从 [Vela 代码阅读路线](docs/code-guide.md) 开始，只跟普通
-ReAct 请求的五步主链路，再逐步进入 Plan、Team、Session 和终端 UI。
+ReAct 请求的五步主链路，再逐步进入 Plan、Session 和终端 UI。
 
 ## 核心能力
 
 | 能力 | 说明 |
 | --- | --- |
-| Agent 运行时 | 支持 ReAct、LangGraph Plan-and-Execute 和 Planner/Worker/Reviewer 多 Agent 协作 |
+| Agent 运行时 | 支持 ReAct 和可恢复的 LangGraph Plan-and-Execute |
 | 任务恢复 | 项目级持久化 Session、任务取消、Graph Checkpoint 和工具结果重放 |
 | 工具系统 | 文件、Shell、代码搜索、网页检索、记忆、Skill 和 MCP 工具 |
 | 安全控制 | HITL 人工确认、路径与命令策略、JSONL 审计日志和会话级权限切换 |
@@ -83,7 +83,6 @@ uv run vela doctor --cwd .
 ```bash
 uv run vela -p "帮我总结这个项目"
 uv run vela --mode plan -p "先读取 README，再验证项目" --json
-uv run vela --mode team --worker-mode plan -p "并行审计核心模块" --json
 ```
 
 ## 配置
@@ -139,7 +138,7 @@ uv run vela -p "解释这个仓库"
 /cancel
 ```
 
-任务运行期间可以使用 `/cancel`、`Esc` 或 `Ctrl+C` 取消 ReAct、Plan、Team 及正在执行的
+任务运行期间可以使用 `/cancel`、`Esc` 或 `Ctrl+C` 取消 ReAct、Plan 及正在执行的
 Shell 工具。第一次 `Ctrl+C` 取消当前任务，再按一次才退出 Vela。取消或失败的对话仍会保存，
 之后可以通过 `/resume` 继续。
 
@@ -158,16 +157,6 @@ Shell 工具。第一次 `Ctrl+C` 取消当前任务，再按一次才退出 Vel
 
 交互式 Checkpoint 保存在 `~/.vela/langgraph/checkpoints.sqlite`。恢复 Session 后执行
 `/plan --resume`，可以从最后一个成功批次继续。
-
-### Multi-Agent
-
-Team 模式由 Planner、Worker 和 Reviewer 组成。Planner 生成带依赖的步骤，Worker 并行执行可运行
-节点，Reviewer 检查结果并触发有限次数的修订。
-
-```text
-/team <task>
-/team --plan <task>
-```
 
 ### 模型选择
 
@@ -203,17 +192,12 @@ Team 模式由 Planner、Worker 和 Reviewer 组成。Planner 生成带依赖的
 /audit [N]
 /plan <task>
 /plan --resume
-/team <task>
-/team --plan <task>
 /model [model-id]
 /model <provider> <model-id>
 /usage
 /skill
 /skill list
 /skill show <name>
-/skill on <name>
-/skill off <name>
-/skill reload
 /mcp
 ```
 
@@ -230,10 +214,9 @@ Vela 内置的主要工具：
 | 命令 | `bash` |
 | 联网 | `web_search`、`web_fetch` |
 | 记忆 | `save_memory`、`search_memory` |
-| Skill | `load_skill`、`save_skill` |
+| Skill | `load_skill` |
 
 写文件、执行命令和远程 MCP 写操作等危险动作会经过 Policy、HITL 和 Audit 处理。
-`save_skill` 同样需要人工确认，模型不会静默改变后续行为。
 
 交互模式下按 `Shift+Tab` 切换权限：
 
@@ -266,7 +249,7 @@ Skill 按以下顺序加载，同名时后层覆盖前层：
 3. `project`：`.vela/skills/*/SKILL.md`
 
 Vela 先根据名称、描述和标签召回 Top-K 候选，再由模型决定是否调用 `load_skill`。Skill 正文只在
-真正加载后进入当前任务。每个并发子 Agent 使用独立缓冲区，避免上下文串线。
+真正加载后进入当前任务。Vela 只读取已有 `SKILL.md`，不会通过模型创建或改写 Skill。
 
 ### Memory
 

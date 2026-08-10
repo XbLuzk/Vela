@@ -281,44 +281,6 @@ def _memory_and_skill_tools() -> list[Tool]:
             required_keys=["name"],
             handler=_load_skill,
         ),
-        Tool(
-            name="save_skill",
-            description=(
-                "Persist a reusable Vela workflow as a project or user skill after user approval."
-            ),
-            parameters=object_schema(
-                {
-                    "name": {"type": "string", "description": "Lowercase skill slug"},
-                    "description": {
-                        "type": "string",
-                        "description": "When this skill should be used",
-                    },
-                    "content": {"type": "string", "description": "Reusable skill instructions"},
-                    "scope": {
-                        "type": "string",
-                        "enum": ["project", "user"],
-                        "description": "Where to persist the skill",
-                    },
-                    "version": {"type": "string", "description": "Skill version"},
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Matching keywords",
-                    },
-                    "overwrite": {
-                        "type": "boolean",
-                        "description": "Update an existing skill instead of failing",
-                    },
-                },
-                ["name", "description", "content"],
-            ),
-            required_keys=["name", "description", "content"],
-            handler=_save_skill,
-            is_read_only=False,
-            is_concurrency_safe=False,
-            danger_level="medium",
-            requires_approval=True,
-        ),
     ]
 
 
@@ -560,7 +522,7 @@ async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
         return ToolResult("Skills are disabled.", is_error=True)
     skill = SkillRegistry(context.cwd).load(str(payload["name"]))
     if not skill:
-        return ToolResult(f'Skill "{payload["name"]}" not found or disabled.', is_error=True)
+        return ToolResult(f'Skill "{payload["name"]}" not found.', is_error=True)
     content = skill.body or skill.content
     if len(content) > 5_000:
         content = content[:5_000] + "\n... [truncated; use /skill show for the full skill]"
@@ -571,43 +533,6 @@ async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
             display_summary=f"Loaded skill {skill.name}",
         )
     return ToolResult(content, display_summary=f"Loaded skill {skill.name}")
-
-
-async def _save_skill(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    if not context.config.features.skill:
-        return ToolResult("Skills are disabled.", is_error=True)
-    raw_tags = payload.get("tags") or []
-    if not isinstance(raw_tags, list):
-        return ToolResult("save_skill tags must be an array of strings.", is_error=True)
-    tags = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
-    registry = SkillRegistry(context.cwd)
-    scope = str(payload.get("scope") or "project")
-    name = str(payload["name"])
-    try:
-        if bool(payload.get("overwrite")):
-            skill = registry.update(
-                name,
-                description=str(payload["description"]),
-                body=str(payload["content"]),
-                scope=scope,
-                version=str(payload.get("version") or "1.0.0"),
-                tags=tags,
-            )
-        else:
-            skill = registry.create(
-                name,
-                description=str(payload["description"]),
-                body=str(payload["content"]),
-                scope=scope,
-                version=str(payload.get("version") or "1.0.0"),
-                tags=tags,
-            )
-    except (OSError, ValueError) as exc:
-        return ToolResult(f"save_skill failed: {exc}", is_error=True)
-    return ToolResult(
-        f'Saved skill "{skill.name}" in {scope} scope at {skill.path}.',
-        display_summary=f"Saved skill {skill.name}",
-    )
 
 
 # ---------------------------------------------------------------------------

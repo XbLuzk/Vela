@@ -9,8 +9,7 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `vela -p`
   - `--provider`
   - `--model`
-  - `--mode react|plan|team`
-  - `--worker-mode react|plan`
+  - `--mode react|plan`
   - `--json` usage output
   - `--cwd`
   - `vela doctor`
@@ -30,7 +29,6 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `/audit`
   - `/plan`
   - `/plan --resume`
-  - `/team`
   - `/model` built-in model selector and direct provider/model switching
   - `/usage`
   - `/skill`
@@ -38,9 +36,9 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `/exit`
   - project-scoped persistent interactive sessions in `~/.vela/sessions/sessions.db`
   - `vela --resume` restores the latest non-empty session for the current project
-  - cooperative cancellation for ReAct, Plan, Team, and active shell tools via `/cancel`, Escape, or Ctrl+C
+  - cooperative cancellation for ReAct, Plan, and active shell tools via `/cancel`, Escape, or Ctrl+C
   - unified `planning -> running -> cancelling -> cancelled|completed|failed` interactive state
-  - Plan and Team review gate with execute, modify/replan, and cancel decisions
+  - Plan review gate with execute, modify/replan, and cancel decisions
   - interrupted sessions remain resumable with incomplete tool calls closed explicitly
 - Agent:
   - OpenAI-compatible streaming LLM client
@@ -51,8 +49,7 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - session-aligned Graph threads and `/plan --resume` recovery from the last successful batch
   - tool-boundary execution journal for mutating calls with stable execution keys, completed-result
     replay, uncertain retry gates, and overwrite `write_file` reconciliation
-  - Multi-Agent orchestrator with Planner, Worker, Reviewer, dependency scheduling, parallel workers, review approval parsing, bounded retry, and per-worker `react|plan` mode
-  - isolated Skill context per SubAgent and per parallel Plan task
+  - isolated Skill context per parallel Plan task
 - Configuration:
   - defaults
   - user config
@@ -73,7 +70,6 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `save_memory`
   - `search_memory`
   - `load_skill`
-  - `save_skill` with mandatory HITL approval
 - Safety:
   - PathGuard
   - CommandGuard
@@ -88,12 +84,10 @@ This file tracks the Python port against the existing Java and TypeScript implem
 - Skills:
   - built-in/user/project skill layers
   - user/project `.vela/skills/*/SKILL.md`
-  - `~/.vela/skills.json` disabled-state store
   - `load_skill` with one-shot SkillContextBuffer injection
   - current-query next-turn Skill injection (no one-request delay)
   - name/description/tag Top-K matcher with Chinese n-gram support
-  - safe project/user create/update and model-proposed `save_skill`
-  - `/skill list/show/on/off/reload`
+  - read-only `/skill list/show` inspection
 - MCP:
   - official MCP Python SDK client
   - stdio MCP server connection
@@ -124,7 +118,7 @@ This file tracks the Python port against the existing Java and TypeScript implem
 - Usage:
   - OpenAI-compatible streaming usage-only chunks
   - input/output/cache-hit/cache-miss/reasoning token aggregation
-  - ReAct/Plan/Team CLI aggregation
+  - ReAct/Plan CLI aggregation
 
 ## Live Dependencies
 
@@ -139,6 +133,7 @@ The Java implementation has a WeChat iLink channel. Vela intentionally does not 
 
 ## Remaining Public Parity Gaps
 
+- Move built-in `web_search` and `web_fetch` behind MCP, then remove the duplicate local Web path.
 - MCP operations in the interactive CLI: server status, restart, logs, runtime enable/disable,
   resources, and prompts management.
 - Browser session operations: connect/status/tabs/disconnect, isolated/shared switching, and
@@ -152,6 +147,13 @@ Vela already exceeds the Java implementation in persistent project sessions, Lan
 checkpoints, tool-boundary execution journaling, completed-result replay, and uncertain-call
 recovery. Parity therefore means closing the public product workflow, not reproducing every
 Java-only integration.
+
+## Intentionally Simplified Areas
+
+- Team mode was removed because it duplicated LangGraph Plan scheduling while adding a second
+  planner/worker execution model. Vela keeps one recoverable planning engine.
+- Skills are read-only. Vela discovers, matches, and loads existing `SKILL.md` files but does not
+  create, overwrite, enable, or disable them at runtime.
 
 ## Verification
 

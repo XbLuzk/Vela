@@ -91,12 +91,8 @@ def main(
     # --- Agent mode ---
     mode: Annotated[
         str | None,
-        typer.Option("--mode", help="Agent mode: react, plan, or team"),
+        typer.Option("--mode", help="Agent mode: react or plan"),
     ] = None,
-    worker_mode: Annotated[
-        str,
-        typer.Option("--worker-mode", help="Sub-Agent worker mode in team runs: react or plan"),
-    ] = "react",
     # --- Output ---
     json_output: Annotated[
         bool,
@@ -146,19 +142,14 @@ def main(
 
     if prompt is not None:
         selected_mode = (mode or config.prompt.agent_mode or "react").lower()
-        if selected_mode not in {"react", "plan", "team"}:
-            raise typer.BadParameter("mode must be react, plan, or team", param_hint="--mode")
-        if worker_mode not in {"react", "plan"}:
-            raise typer.BadParameter(
-                "worker-mode must be react or plan", param_hint="--worker-mode"
-            )
+        if selected_mode not in {"react", "plan"}:
+            raise typer.BadParameter("mode must be react or plan", param_hint="--mode")
         asyncio.run(
             _run_prompt(
                 prompt,
                 str(root),
                 config,
                 mode=selected_mode,
-                worker_mode=worker_mode,
                 json_output=json_output,
             )
         )
@@ -251,7 +242,6 @@ async def _run_prompt(
     config,
     *,
     mode: str = "react",
-    worker_mode: str = "react",
     json_output: bool = False,
 ) -> None:
     """Execute a single prompt and print the result."""
@@ -273,7 +263,6 @@ async def _run_prompt(
         config=config,
         cwd=cwd,
         mode=mode,
-        worker_mode=worker_mode,
     )
     try:
         result = await agent.run_complete(prompt)
@@ -286,7 +275,6 @@ async def _run_prompt(
                 {
                     "text": result.text,
                     "mode": mode,
-                    "worker_mode": worker_mode if mode == "team" else None,
                     "turns": result.turns,
                     "total_tokens": result.total_tokens,
                     "usage": result.usage.to_dict(),

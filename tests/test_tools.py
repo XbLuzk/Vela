@@ -38,11 +38,12 @@ def test_read_write_file_tool(tmp_path, monkeypatch):
     assert "2: world" in read_result.content
 
 
-def test_builtin_tools_include_memory_recall_and_skill_sedimentation():
+def test_builtin_tools_include_memory_recall_and_read_only_skills():
     names = {tool.name for tool in get_builtin_tools()}
 
     assert "search_memory" in names
-    assert "save_skill" in names
+    assert "load_skill" in names
+    assert "save_skill" not in names
 
 
 def test_bash_tool_cancellation_stops_process_group(tmp_path, monkeypatch):

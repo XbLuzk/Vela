@@ -337,7 +337,7 @@ class RichRenderer:
         notes = Text()
         for line in [
             "A quieter terminal workspace for focused agent runs",
-            "ReAct, LangGraph Plan, Team, tools, skills, and MCP",
+            "ReAct, LangGraph Plan, tools, skills, and MCP",
             "Use /help for commands and /config for settings",
         ]:
             notes.append("- ", style="dim")

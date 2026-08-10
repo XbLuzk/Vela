@@ -3,7 +3,6 @@ from vela.skill.registry import (
     SkillContextBuffer,
     SkillMatcher,
     SkillRegistry,
-    SkillStateStore,
 )
 
-__all__ = ["Skill", "SkillContextBuffer", "SkillMatcher", "SkillRegistry", "SkillStateStore"]
+__all__ = ["Skill", "SkillContextBuffer", "SkillMatcher", "SkillRegistry"]

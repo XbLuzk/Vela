@@ -4,17 +4,13 @@ import asyncio
 import json
 from pathlib import Path
 
-import pytest
-
 from vela.config import load_config
-from vela.skill import SkillContextBuffer, SkillMatcher, SkillRegistry, SkillStateStore
-from vela.tools import ToolRegistry, get_builtin_tools
+from vela.skill import SkillContextBuffer, SkillMatcher, SkillRegistry
 from vela.tools.base import ToolContext
 from vela.tools.builtins import _load_skill
-from vela.tools.executor import ToolExecutor
 
 
-def test_skill_registry_layers_and_state(tmp_path, monkeypatch):
+def test_skill_registry_layers_are_read_only(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     builtin = tmp_path / "builtin"
     user = tmp_path / "user"
@@ -22,23 +18,12 @@ def test_skill_registry_layers_and_state(tmp_path, monkeypatch):
     _write_skill(builtin, "web-access", "builtin desc", "v0")
     _write_skill(user, "web-access", "user desc", "v1")
     _write_skill(project / ".vela" / "skills", "project-only", "project desc", "v2")
-    state = SkillStateStore(tmp_path / "skills.json")
-    state.disable("web-access")
 
-    registry = SkillRegistry(
-        project,
-        builtin_root=builtin,
-        user_root=user,
-        state_store=state,
-    )
+    registry = SkillRegistry(project, builtin_root=builtin, user_root=user)
 
-    assert [skill.name for skill in registry.all_skills()] == ["project-only", "web-access"]
-    assert registry.load("web-access") is None
-    assert registry.load("web-access", include_disabled=True).source == "user"
-    assert [skill.name for skill in registry.enabled_skills()] == ["project-only"]
-
-    assert registry.enable("web-access")
+    assert [skill.name for skill in registry.list()] == ["project-only", "web-access"]
     assert registry.load("web-access").description == "user desc"
+    assert registry.load("web-access").source == "user"
 
 
 def test_skill_context_buffer_is_one_shot_and_capped():
@@ -91,126 +76,15 @@ def test_skill_matcher_ranks_explicit_names_and_chinese_english_terms(tmp_path, 
         "v1",
         tags=["web", "research"],
     )
-    _write_skill(builtin, "disabled-web", "current web research", "v1", tags=["web"])
-    state = SkillStateStore(tmp_path / "skills.json")
-    state.disable("disabled-web")
-    registry = SkillRegistry(
-        project,
-        builtin_root=builtin,
-        user_root=user,
-        state_store=state,
-    )
+    registry = SkillRegistry(project, builtin_root=builtin, user_root=user)
 
     assert registry.match("请从扫描图片里提取文字", top_k=1)[0].name == "pdf-ocr"
     assert registry.match("research the latest webpage", top_k=1)[0].name == "web-access"
     explicit = registry.match("请用 pdf-ocr，再 research the latest webpage", top_k=2)
     assert explicit[0].name == "pdf-ocr"
-    assert "disabled-web" not in [skill.name for skill in registry.match("web research")]
 
-    matcher = SkillMatcher(registry.all_skills())
+    matcher = SkillMatcher(registry.list())
     assert len(matcher.match("web research", top_k=1)) == 1
-
-
-def test_skill_registry_create_update_and_scope(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    project = tmp_path / "project"
-    user = tmp_path / "user"
-    registry = SkillRegistry(
-        project,
-        builtin_root=tmp_path / "builtin",
-        user_root=user,
-        state_store=SkillStateStore(tmp_path / "skills.json"),
-    )
-
-    created = registry.create(
-        "release-check",
-        description="Validate a release before publishing",
-        body="# Release Check\n\nRun tests and inspect the build.",
-        tags=["release", "verification"],
-    )
-    assert created.source == "project"
-    assert created.path == project / ".vela" / "skills" / "release-check" / "SKILL.md"
-    assert registry.load("release-check").tags == ["release", "verification"]
-
-    with pytest.raises(FileExistsError):
-        registry.create(
-            "release-check",
-            description="Do not overwrite",
-            body="replacement",
-        )
-
-    updated = registry.update("release-check", body="updated instructions", version="2.0.0")
-    assert updated.body == "updated instructions"
-    assert updated.description == "Validate a release before publishing"
-    assert updated.version == "2.0.0"
-
-    user_skill = registry.create(
-        "personal-style",
-        description="Apply my reusable writing style",
-        body="Use concise paragraphs.",
-        scope="user",
-    )
-    assert user_skill.source == "user"
-    assert user_skill.path == user / "personal-style" / "SKILL.md"
-
-
-@pytest.mark.parametrize("name", ["../escape", "bad/name", "/tmp/escape", "Bad Name", "."])
-def test_skill_registry_rejects_unsafe_names(tmp_path, name):
-    registry = SkillRegistry(
-        tmp_path / "project",
-        builtin_root=tmp_path / "builtin",
-        user_root=tmp_path / "user",
-        state_store=SkillStateStore(tmp_path / "skills.json"),
-    )
-
-    with pytest.raises(ValueError):
-        registry.create(name, description="unsafe", body="unsafe")
-
-
-def test_save_skill_tool_requires_approval_and_persists_after_approval(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
-    registry = ToolRegistry()
-    registry.register_all(get_builtin_tools())
-    tool = registry.get("save_skill")
-    assert tool is not None
-    assert tool.requires_approval
-    assert not tool.is_read_only
-    assert not tool.is_concurrency_safe
-    assert set(tool.required_keys) == {"name", "description", "content"}
-
-    call = {
-        "id": "save_1",
-        "function": {
-            "name": "save_skill",
-            "arguments": json.dumps(
-                {
-                    "name": "test-workflow",
-                    "description": "Reusable test workflow",
-                    "content": "Run the focused tests.",
-                }
-            ),
-        },
-    }
-    executor = ToolExecutor(registry)
-    denied = asyncio.run(
-        executor.execute_all([call], ToolContext(cwd=str(tmp_path), config=config))
-    )[0]
-    assert denied.is_error
-    assert not (tmp_path / ".vela" / "skills" / "test-workflow" / "SKILL.md").exists()
-
-    approved = asyncio.run(
-        executor.execute_all(
-            [call],
-            ToolContext(
-                cwd=str(tmp_path),
-                config=config,
-                approval_callback=lambda _request: "approve",
-            ),
-        )
-    )[0]
-    assert not approved.is_error
-    assert (tmp_path / ".vela" / "skills" / "test-workflow" / "SKILL.md").is_file()
 
 
 def _write_skill(

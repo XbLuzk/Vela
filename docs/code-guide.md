@@ -1,7 +1,7 @@
 # Vela 代码阅读路线
 
 这份路线面向刚开始阅读 Python 项目的开发者。不要从最大的文件逐行啃，先只跟一条普通 ReAct
-请求，再分别补 Plan、Team 和持久化。
+请求，再分别补 Plan 和持久化。
 
 ## 1. 先看最短主链路
 
@@ -10,7 +10,7 @@
 1. `src/vela/entrypoints/cli.py::main`：解析命令行参数，选择交互模式或单次任务。
 2. `src/vela/entrypoints/repl.py::start_repl`：组装模型、工具、Agent 和 Session。
 3. `src/vela/entrypoints/repl.py::_repl_loop`：读取用户输入并启动当前任务。
-4. `src/vela/agent/agent.py::Agent.run`：根据 `react / plan / team` 选择执行方式。
+4. `src/vela/agent/agent.py::Agent.run`：根据 `react / plan` 选择执行方式。
 5. `src/vela/agent/query.py::run_react_loop`：执行“模型回复 → 工具调用 → 工具结果 → 再次回复”。
 
 先忽略界面样式、MCP、Memory 和恢复逻辑。能解释这五步，就已经理解了项目最核心的运行链路。
@@ -29,18 +29,14 @@
 - `src/vela/tools/builtins.py` 只声明工具名称、参数和处理函数。
 - `src/vela/tools/file_ops.py` 等模块实现真正的文件或命令操作。
 
-## 3. 再看 Plan 和 Team
+## 3. 再看 Plan
 
-普通 ReAct 看懂后再进入两个分支：
+普通 ReAct 看懂后再进入 Plan 分支：
 
 - Plan：`src/vela/agent/plan_graph.py::LangGraphPlanAgent.run`
   - Planner 生成 DAG。
   - LangGraph 保存状态、等待人工确认并并行派发可执行节点。
   - 每个节点仍然复用 `run_react_loop()`，不是另一套工具系统。
-- Team：`src/vela/agent/orchestrator.py::AgentOrchestrator.run`
-  - Planner 拆步骤。
-  - Worker 执行步骤。
-  - Reviewer 验证结果并决定是否重试。
 
 ## 4. 最后补持久化和终端 UI
 

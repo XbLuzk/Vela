@@ -47,8 +47,6 @@ class PromptAssembler:
             "temporary status, raw logs, or uncertain claims.",
             "- Call search_memory when the request depends on prior preferences or decisions and "
             "the automatically recalled items are insufficient.",
-            "- Call save_skill only when a successful procedure is genuinely reusable; it requires "
-            "human approval before persistence.",
         ]
         instructions = self._static_project_instructions()
         if instructions:

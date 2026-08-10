@@ -1,4 +1,4 @@
-"""Shared ReAct loop for Agent, Plan workers, and Team workers."""
+"""Shared ReAct loop for the default Agent and LangGraph Plan tasks."""
 
 from __future__ import annotations
 

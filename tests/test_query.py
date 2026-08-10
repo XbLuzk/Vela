@@ -5,7 +5,6 @@ from typing import Any
 
 from vela.agent import Agent
 from vela.config import load_config
-from vela.skill import SkillRegistry
 from vela.tools import ToolRegistry, get_builtin_tools
 from vela.types import Message
 
@@ -154,11 +153,12 @@ def test_react_loop_preserves_stream_event_order(tmp_path, monkeypatch):
 
 def test_load_skill_is_injected_in_the_same_query_next_model_turn(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    SkillRegistry(tmp_path).create(
-        "demo-skill",
-        description="Use for the demo workflow",
-        body="Apply the demo workflow now.",
-        tags=["demo"],
+    skill_dir = tmp_path / ".vela" / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: Use for the demo workflow\n"
+        "tags: [demo]\n---\nApply the demo workflow now.\n",
+        encoding="utf-8",
     )
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"

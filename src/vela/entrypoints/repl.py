@@ -18,7 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from vela import __version__
-from vela.agent import Agent, AgentOrchestrator, LangGraphPlanAgent
+from vela.agent import Agent, LangGraphPlanAgent
 from vela.bootstrap import build_tool_registry
 from vela.branding import CLI_NAME, PRODUCT_NAME
 from vela.config import VelaConfig, config_to_public_dict
@@ -58,7 +58,6 @@ SLASH_COMMANDS = [
     "/policy",
     "/audit",
     "/plan",
-    "/team",
     "/model",
     "/usage",
     "/skill",
@@ -67,13 +66,13 @@ SLASH_COMMANDS = [
 
 INTERACTIVE_HELP = """\
 Task controls
-  /cancel              Cancel the current Agent, tool, Plan, or Team task
+  /cancel              Cancel the current Agent, tool, or Plan task
   Esc                   Cancel the current task
   Ctrl+C                Cancel once; press again while cancelling to exit Vela
   Ctrl+V                Save a macOS clipboard image and insert an @image reference
 
 Plan review
-  execute               Confirm the displayed Plan/Team plan
+  execute               Confirm the displayed Plan
   modify <requirement>  Replan with your feedback
   cancel                Cancel before execution starts
 
@@ -338,8 +337,8 @@ async def _handle_slash(raw: str, runtime: ReplRuntime) -> bool:
         _handle_session_command(command, arg, runtime)
     elif command in {"/context", "/memory", "/save"}:
         await _handle_context_command(command, arg, runtime)
-    elif command in {"/plan", "/team"}:
-        _handle_task_command(command, arg, runtime)
+    elif command == "/plan":
+        _handle_plan_command(arg, runtime)
     elif command in {
         "/config",
         "/tools",
@@ -410,14 +409,11 @@ async def _handle_context_command(command: str, arg: str, runtime: ReplRuntime) 
             runtime.console.print(f"Saved memory #{memory_id}")
 
 
-def _handle_task_command(command: str, arg: str, runtime: ReplRuntime) -> None:
+def _handle_plan_command(arg: str, runtime: ReplRuntime) -> None:
     if not arg:
-        runtime.console.print(f"[red]Usage:[/red] {command} <task>")
+        runtime.console.print("[red]Usage:[/red] /plan <task>")
         return
-    if command == "/plan":
-        _start_plan(arg, runtime)
-    else:
-        _start_team(arg, runtime)
+    _start_plan(arg, runtime)
 
 
 def _start_plan(arg: str, runtime: ReplRuntime) -> None:
@@ -441,36 +437,6 @@ def _start_plan(arg: str, runtime: ReplRuntime) -> None:
         runtime.task_controller,
     )
     runtime.task_controller.start(run, initial_state=TaskState.PLANNING, label=arg)
-
-
-def _start_team(arg: str, runtime: ReplRuntime) -> None:
-    try:
-        worker_mode, team_task = _parse_mode_argument(arg)
-    except ValueError as exc:
-        runtime.console.print(f"[red]{exc}[/red]")
-        return
-    orchestrator = AgentOrchestrator(
-        llm_client=runtime.agent.llm_client,
-        tool_registry=runtime.registry,
-        config=runtime.config,
-        cwd=runtime.cwd,
-        approval_callback=runtime.agent.approval_callback,
-        default_worker_mode=worker_mode,
-        plan_review_callback=runtime.task_controller.request_plan_review,
-    )
-    run = _run_delegated_with_session(
-        orchestrator,
-        team_task,
-        runtime.agent,
-        runtime.active_session,
-        runtime.console,
-        runtime.task_controller,
-    )
-    runtime.task_controller.start(
-        run,
-        initial_state=TaskState.PLANNING,
-        label=team_task,
-    )
 
 
 async def _handle_settings_command(command: str, arg: str, runtime: ReplRuntime) -> None:
@@ -563,7 +529,7 @@ def _print_session_warning(console: Console, active_session: ActiveSession) -> N
 
 
 async def _run_delegated_with_session(
-    delegated_agent: LangGraphPlanAgent | AgentOrchestrator,
+    delegated_agent: LangGraphPlanAgent,
     message: str,
     agent: Agent,
     active_session: ActiveSession,
@@ -652,21 +618,10 @@ def _skill_command(arg: str, console: Console, cwd: str) -> None:
             return
         console.print(skill.content[:12_000])
         return
-    if sub == "on" and rest:
-        console.print("enabled" if registry.enable(rest.strip()) else "skill not found")
+    if sub and sub != "list":
+        console.print("[red]Usage:[/red] /skill [list|show <name>]")
         return
-    if sub == "off" and rest:
-        console.print("disabled" if registry.disable(rest.strip()) else "skill not found")
-        return
-    if sub == "reload":
-        registry.reload()
-        console.print("skills reloaded")
-        return
-    rows = registry.all_skills()
-    lines = [
-        f"{item.name}\t{item.source}\t{'on' if item.enabled else 'off'}\t{item.description}"
-        for item in rows
-    ]
+    lines = [f"{item.name}\t{item.source}\t{item.description}" for item in registry.list()]
     console.print("\n".join(lines) or "(no skills)")
 
 
@@ -715,26 +670,3 @@ def _count_named_files(root: str, filename: str) -> int:
         if filename in filenames:
             count += 1
     return count
-
-
-def _parse_mode_argument(
-    value: str,
-    *,
-    allowed: set[str] | None = None,
-) -> tuple[str, str]:
-    modes = allowed or {"react", "plan"}
-    parts = value.strip().split(maxsplit=2)
-    if len(parts) >= 2 and parts[0] in {"--mode", "-m"}:
-        mode = parts[1].lower()
-        if mode not in modes:
-            raise ValueError(f"mode must be one of: {', '.join(sorted(modes))}")
-        prompt = parts[2].strip() if len(parts) == 3 else ""
-        if not prompt:
-            raise ValueError("task text is required after --mode")
-        return mode, prompt
-    if parts and parts[0] == "--plan":
-        prompt = value.strip()[len("--plan") :].strip()
-        if not prompt:
-            raise ValueError("task text is required after --plan")
-        return "plan", prompt
-    return "react", value.strip()
