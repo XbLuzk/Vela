@@ -119,6 +119,39 @@ def test_agent_executes_tool_and_replays_result(tmp_path, monkeypatch):
     assert result.turns == 2
 
 
+def test_react_loop_preserves_stream_event_order(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "note.txt").write_text("hello\n", encoding="utf-8")
+    config = load_config(project_root=tmp_path)
+    config.llm.api_key = "test-key"
+    config.features.context_compression = False
+    registry = ToolRegistry()
+    registry.register_all(get_builtin_tools())
+    agent = Agent(
+        llm_client=FakeClient(),
+        tool_registry=registry,
+        config=config,
+        cwd=str(tmp_path),
+    )
+
+    async def run():
+        return [event async for event in agent.run("read note")]
+
+    events = asyncio.run(run())
+
+    assert [event["type"] for event in events] == [
+        "turn_complete",
+        "tool_call",
+        "tool_result",
+        "text_delta",
+        "turn_complete",
+        "done",
+    ]
+    assert events[1]["name"] == "read_file"
+    assert "1: hello" in events[2]["result"]
+    assert events[-1]["total_turns"] == 2
+
+
 def test_load_skill_is_injected_in_the_same_query_next_model_turn(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     SkillRegistry(tmp_path).create(

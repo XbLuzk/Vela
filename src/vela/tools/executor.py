@@ -94,6 +94,7 @@ class ToolExecutor:
         execution_key = ""
         execution_claimed = False
         try:
+            # 1. Validate input and recover any durable result from an earlier run.
             data = tool.validate(payload)
             if context.execution_scope and not tool.is_read_only:
                 execution_key, input_hash = execution_identity(
@@ -120,6 +121,7 @@ class ToolExecutor:
                         journal.complete(execution_key, reconciled)
                         return reconciled
 
+            # 2. Apply the current approval policy before claiming a new mutation.
             decision = await self._approval_decision(tool, data, context)
             if decision in {"deny", "skip"}:
                 approver = "hitl"
@@ -138,6 +140,7 @@ class ToolExecutor:
             if tool.requires_approval or context.config.policy.hitl_mode == "always":
                 approver = "hitl"
 
+            # 3. Claim this mutation so resume cannot silently execute it twice.
             if journal is not None:
                 claim = journal.claim(
                     execution_key=execution_key,
@@ -162,6 +165,7 @@ class ToolExecutor:
                     )
                 execution_claimed = True
 
+            # 4. Execute the tool, then persist and audit its final outcome.
             try:
                 result = await tool.execute(data, context)
             except asyncio.CancelledError:
