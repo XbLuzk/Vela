@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from tests.plan_test_support import FakeClient, ParallelPlanClient, ReviewPlanClient
+from tests.agent.plan_support import FakeClient, ParallelPlanClient, ReviewPlanClient
 from vela.agent import LangGraphPlanAgent
 from vela.config import load_config
 from vela.plan import ExecutionPlan, Planner, Task, TaskType

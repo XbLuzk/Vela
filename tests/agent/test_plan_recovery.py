@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from tests.plan_test_support import (
+from tests.agent.plan_support import (
     FailingTaskClient,
     JournalResumeClient,
     ParallelCheckpointClient,
