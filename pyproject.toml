@@ -55,6 +55,9 @@ include = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+  "live: calls real external model, MCP, or browser dependencies",
+]
 
 [tool.ruff]
 line-length = 100

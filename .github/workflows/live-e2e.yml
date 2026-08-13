@@ -1,0 +1,85 @@
+name: Live E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: OpenAI-compatible provider name
+        required: true
+        default: deepseek
+        type: string
+      model:
+        description: Model name
+        required: true
+        default: deepseek-v4-flash
+        type: string
+      browser:
+        description: Run Chrome DevTools MCP acceptance
+        required: true
+        default: false
+        type: boolean
+      plan:
+        description: Run real Planner and Plan DAG acceptance
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VELA_PROVIDER: ${{ inputs.provider }}
+      VELA_MODEL: ${{ inputs.model }}
+      VELA_LIVE_BROWSER: ${{ inputs.browser }}
+      VELA_LIVE_PLAN: ${{ inputs.plan }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node.js for browser MCP
+        if: inputs.browser
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Require live API key
+        env:
+          VELA_API_KEY: ${{ secrets.VELA_LIVE_API_KEY }}
+        run: |
+          if [ -z "$VELA_API_KEY" ]; then
+            echo "::error::Configure the VELA_LIVE_API_KEY repository secret first."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --python 3.13
+
+      - name: Check Chrome availability
+        if: inputs.browser
+        run: google-chrome --version
+
+      - name: Run live acceptance
+        env:
+          VELA_API_KEY: ${{ secrets.VELA_LIVE_API_KEY }}
+        run: uv run --frozen pytest tests/e2e --run-live -v

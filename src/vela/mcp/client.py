@@ -197,7 +197,7 @@ class McpClientManager:
             params = StdioServerParameters(
                 command=spec.command,
                 args=spec.args,
-                env={**os.environ, **spec.env},
+                env=_stdio_environment(spec.env),
                 cwd=spec.cwd or self.project_root,
             )
             with open(os.devnull, "w", encoding="utf-8") as errlog:
@@ -242,3 +242,38 @@ def _content_to_text(content: Any) -> str:
     if hasattr(content, "model_dump"):
         return json.dumps(content.model_dump(mode="json"), ensure_ascii=False)
     return str(content)
+
+
+def _stdio_environment(configured: dict[str, str]) -> dict[str, str]:
+    """Build an MCP environment without leaking unrelated parent-process secrets.
+
+    A server that genuinely needs a credential must receive it explicitly from
+    its ``mcp.json`` ``env`` section. Explicit values win after filtering.
+    """
+
+    inherited = {key: value for key, value in os.environ.items() if _is_safe_environment_key(key)}
+    return {**inherited, **configured}
+
+
+def _is_safe_environment_key(key: str) -> bool:
+    normalized = key.upper()
+    return normalized in {
+        "COLORTERM",
+        "COMSPEC",
+        "HOME",
+        "LANG",
+        "LOGNAME",
+        "PATH",
+        "PATHEXT",
+        "SHELL",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "USER",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+    } or normalized.startswith("LC_")

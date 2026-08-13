@@ -5,6 +5,7 @@ import json
 
 from vela.config import load_config
 from vela.mcp import McpClientManager
+from vela.mcp.client import _stdio_environment
 from vela.tools.base import ToolContext
 
 
@@ -104,3 +105,21 @@ if __name__ == "__main__":
     assert any(tool.name == "mcp__noisy__echo" for tool in tools)
     captured = capsys.readouterr()
     assert "NOISY_MCP_STARTUP" not in captured.err
+
+
+def test_mcp_stdio_environment_does_not_inherit_parent_secrets(monkeypatch):
+    monkeypatch.setenv("VELA_API_KEY", "model-secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "repository-secret")
+    monkeypatch.setenv("DB_PASSWORD", "database-secret")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "cloud-secret")
+    monkeypatch.setenv("SAFE_SETTING", "not-automatically-safe")
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+
+    env = _stdio_environment({"GITHUB_TOKEN": "explicit-mcp-token"})
+
+    assert "VELA_API_KEY" not in env
+    assert "DB_PASSWORD" not in env
+    assert "AWS_ACCESS_KEY_ID" not in env
+    assert "SAFE_SETTING" not in env
+    assert env["GITHUB_TOKEN"] == "explicit-mcp-token"
+    assert env["LANG"] == "zh_CN.UTF-8"
