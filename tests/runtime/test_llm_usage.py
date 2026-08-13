@@ -72,10 +72,11 @@ def test_agent_propagates_connection_error_without_raising(tmp_path, monkeypatch
 
     assert [event["type"] for event in events] == [
         "run_started",
+        "turn_started",
         "error",
         "run_finished",
     ]
-    assert "Could not connect to deepseek" in str(events[1]["error"])
+    assert "Could not connect to deepseek" in str(events[2]["error"])
     assert events[-1]["status"] == "failed"
 
 

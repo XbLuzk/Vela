@@ -351,16 +351,22 @@ def test_react_loop_preserves_stream_event_order(tmp_path, monkeypatch):
 
     assert [event["type"] for event in events] == [
         "run_started",
-        "turn_complete",
+        "turn_started",
+        "model_response_complete",
         "tool_call",
         "tool_result",
+        "turn_complete",
+        "turn_started",
         "text_delta",
+        "model_response_complete",
         "turn_complete",
         "done",
         "run_finished",
     ]
-    assert events[2]["name"] == "read_file"
-    assert "1: hello" in events[3]["result"]
+    assert events[3]["name"] == "read_file"
+    assert events[3]["tool_call_id"] == "call_1"
+    assert "1: hello" in events[4]["result"]
+    assert events[4]["tool_call_id"] == "call_1"
     done = next(event for event in events if event["type"] == "done")
     assert done["total_turns"] == 2
     assert events[0]["run_id"] == events[-1]["run_id"]
@@ -457,9 +463,11 @@ def test_react_runtime_keeps_one_model_call_and_vela_stream_events(tmp_path, mon
     assert client.calls == 1
     assert [event["type"] for event in events] == [
         "run_started",
+        "turn_started",
         "thinking_delta",
         "text_delta",
         "usage",
+        "model_response_complete",
         "turn_complete",
         "done",
         "run_finished",

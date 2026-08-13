@@ -12,6 +12,7 @@ def test_stream_event_contracts_require_a_closed_type_discriminator() -> None:
         "context_compressed",
         "done",
         "error",
+        "model_response_complete",
         "plan_created",
         "plan_resume_warning",
         "plan_review",
@@ -25,6 +26,7 @@ def test_stream_event_contracts_require_a_closed_type_discriminator() -> None:
         "tool_call",
         "tool_result",
         "turn_complete",
+        "turn_started",
         "usage",
     }
     assert set(get_args(LlmEventType)) == {

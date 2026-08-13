@@ -414,7 +414,14 @@ class LangGraphPlanAgent:
                     if content:
                         tool_results.append(content)
                     writer(_with_task_context(event, task))
-                elif event_type in {"thinking_delta", "tool_call", "context_compressed"}:
+                elif event_type in {
+                    "thinking_delta",
+                    "tool_call",
+                    "context_compressed",
+                    "turn_started",
+                    "model_response_complete",
+                    "turn_complete",
+                }:
                     writer(_with_task_context(event, task))
                 elif event_type == "done":
                     turns += int(event.get("total_turns") or 0)
@@ -445,6 +452,7 @@ class LangGraphPlanAgent:
                 "type": "plan_task_done",
                 "task_id": task.id,
                 "task_description": task.description,
+                "task_status": status,
                 "turns": turns,
                 "tokens": usage.total_tokens,
             }

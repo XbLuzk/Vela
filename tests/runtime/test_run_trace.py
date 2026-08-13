@@ -23,13 +23,26 @@ def test_tracker_emits_lifecycle_and_persists_completed_summary(tmp_path) -> Non
         _collect(
             tracker.stream(
                 _events(
-                    {"type": "tool_call", "name": "read_file", "input": {}},
+                    {"type": "turn_started", "turn": 1},
+                    {
+                        "type": "model_response_complete",
+                        "turn": 1,
+                        "stop_reason": "tool_use",
+                    },
+                    {
+                        "type": "tool_call",
+                        "tool_call_id": "call_1",
+                        "name": "read_file",
+                        "input": {},
+                    },
                     {
                         "type": "tool_result",
+                        "tool_call_id": "call_1",
                         "name": "read_file",
                         "result": "ok",
                         "replayed": True,
                     },
+                    {"type": "turn_complete", "turn": 1, "stop_reason": "tool_use"},
                     {
                         "type": "done",
                         "total_turns": 2,
@@ -43,8 +56,11 @@ def test_tracker_emits_lifecycle_and_persists_completed_summary(tmp_path) -> Non
 
     assert [event["type"] for event in events] == [
         "run_started",
+        "turn_started",
+        "model_response_complete",
         "tool_call",
         "tool_result",
+        "turn_complete",
         "done",
         "run_finished",
     ]
@@ -56,6 +72,66 @@ def test_tracker_emits_lifecycle_and_persists_completed_summary(tmp_path) -> Non
     assert trace["tool_calls"] == 1
     assert trace["replayed_tools"] == 1
     assert trace["finished_at"]
+    turn_span, tool_span = trace["spans"]
+    assert turn_span["kind"] == "model_turn"
+    assert turn_span["status"] == "completed"
+    assert turn_span["attributes"]["stop_reason"] == "tool_use"
+    assert tool_span["kind"] == "tool_call"
+    assert tool_span["parent_span_id"] == turn_span["span_id"]
+    assert tool_span["attributes"]["tool_call_id"] == "call_1"
+
+
+def test_plan_trace_nests_model_and_tool_spans_under_task(tmp_path) -> None:
+    store = RunTraceStore(tmp_path / "runs.jsonl")
+    tracker = RunTracker(
+        mode="plan",
+        model="fake-model",
+        provider="fake-provider",
+        cwd="/tmp/project",
+        store=store,
+    )
+
+    asyncio.run(
+        _collect(
+            tracker.stream(
+                _events(
+                    {
+                        "type": "plan_task_started",
+                        "task_id": "task_1",
+                        "task_description": "read a file",
+                    },
+                    {"type": "turn_started", "task_id": "task_1", "turn": 1},
+                    {
+                        "type": "tool_call",
+                        "task_id": "task_1",
+                        "tool_call_id": "call_1",
+                        "name": "read_file",
+                        "input": {},
+                    },
+                    {
+                        "type": "tool_result",
+                        "task_id": "task_1",
+                        "tool_call_id": "call_1",
+                        "name": "read_file",
+                        "result": "ok",
+                    },
+                    {"type": "turn_complete", "task_id": "task_1", "turn": 1},
+                    {
+                        "type": "plan_task_done",
+                        "task_id": "task_1",
+                        "task_description": "read a file",
+                        "task_status": "completed",
+                    },
+                    {"type": "done", "total_turns": 1, "langgraph": {"status": "completed"}},
+                )
+            )
+        )
+    )
+
+    plan_span, turn_span, tool_span = store.list(limit=1)[0]["spans"]
+    assert plan_span["kind"] == "plan_node"
+    assert turn_span["parent_span_id"] == plan_span["span_id"]
+    assert tool_span["parent_span_id"] == turn_span["span_id"]
 
 
 def test_error_trace_is_settled_before_consumer_closes_stream(tmp_path) -> None:
@@ -506,6 +582,7 @@ def test_closing_public_agent_stream_closes_child_runtime(tmp_path) -> None:
     async def close_after_model_event() -> None:
         stream = agent.run("hello")
         assert (await anext(stream))["type"] == "run_started"
+        assert (await anext(stream))["type"] == "turn_started"
         assert (await anext(stream))["type"] == "text_delta"
         await stream.aclose()
         assert client.closed
@@ -533,6 +610,7 @@ def test_cleanup_failure_keeps_trace_and_surfaces_warning(tmp_path) -> None:
     async def close_after_model_event() -> None:
         stream = agent.run("hello")
         assert (await anext(stream))["type"] == "run_started"
+        assert (await anext(stream))["type"] == "turn_started"
         assert (await anext(stream))["type"] == "text_delta"
         await stream.aclose()
         assert agent.last_run_trace is not None

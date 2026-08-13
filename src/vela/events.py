@@ -17,6 +17,7 @@ AgentEventType = Literal[
     "context_compressed",
     "done",
     "error",
+    "model_response_complete",
     "plan_created",
     "plan_resume_warning",
     "plan_review",
@@ -30,11 +31,28 @@ AgentEventType = Literal[
     "tool_call",
     "tool_result",
     "turn_complete",
+    "turn_started",
     "usage",
 ]
 
 AgentPhase = Literal["planning", "execution"]
 RunStatus = Literal["planning", "running", "cancelled", "completed", "failed"]
+TraceSpanKind = Literal["context", "model_turn", "plan_node", "tool_call"]
+TraceSpanStatus = Literal["running", "completed", "failed", "cancelled"]
+
+
+class TraceSpanPayload(TypedDict):
+    """Serializable child operation inside one Agent run."""
+
+    span_id: str
+    parent_span_id: str | None
+    kind: TraceSpanKind
+    name: str
+    status: TraceSpanStatus
+    started_at: str
+    finished_at: str | None
+    duration_ms: int
+    attributes: dict[str, str | int | float | bool | None]
 
 
 class RunTracePayload(TypedDict):
@@ -56,6 +74,7 @@ class RunTracePayload(TypedDict):
     tool_errors: int
     replayed_tools: int
     error: str | None
+    spans: list[TraceSpanPayload]
 
 
 class _AgentEventBase(TypedDict):
@@ -79,6 +98,7 @@ class AgentEvent(_AgentEventBase, total=False):
     total_tokens: int
     total_turns: int
     turn: int
+    tool_call_id: str
     stop_reason: str
     messages: list[Message]
     langgraph: dict[str, Any]
@@ -98,6 +118,7 @@ class AgentEvent(_AgentEventBase, total=False):
     pending_tasks: int
     task_id: str
     task_description: str
+    task_status: str
     turns: int
     tokens: int
     plan: PlanEventValue

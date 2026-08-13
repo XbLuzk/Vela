@@ -103,6 +103,8 @@ async def run_react_agent(
             if compression_event is not None:
                 yield compression_event
 
+            yield {"type": "turn_started", "turn": turn_number}
+
             model_turn = _ModelTurn()
             model_stream = _stream_model_turn(
                 llm_client,
@@ -128,12 +130,17 @@ async def run_react_agent(
                 Message(role="assistant", content=model_turn.text, tool_calls=tool_calls)
             )
             yield {
-                "type": "turn_complete",
+                "type": "model_response_complete",
                 "turn": turn_number,
                 "stop_reason": model_turn.stop_reason,
             }
 
             if not tool_calls:
+                yield {
+                    "type": "turn_complete",
+                    "turn": turn_number,
+                    "stop_reason": model_turn.stop_reason,
+                }
                 break
             if turn_number == max_turns:
                 _close_skipped_tool_calls(transcript, tool_calls, max_turns)
@@ -151,6 +158,11 @@ async def run_react_agent(
                     yield event
             finally:
                 await tool_stream.aclose()
+            yield {
+                "type": "turn_complete",
+                "turn": turn_number,
+                "stop_reason": model_turn.stop_reason,
+            }
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - failures are part of the Agent event protocol
@@ -228,6 +240,7 @@ async def _execute_tool_round(
     for call in tool_calls:
         yield {
             "type": "tool_call",
+            "tool_call_id": str(call["id"]),
             "name": _tool_name(call) or "unknown",
             "input": _tool_input(call),
         }
@@ -245,7 +258,7 @@ async def _execute_tool_round(
 
             message = Message(role="tool", content=result.content, tool_call_id=call_id)
             transcript.append(message)
-            yield _tool_result_event(name, result)
+            yield _tool_result_event(call_id, name, result)
     finally:
         await results.aclose()
 
@@ -389,9 +402,10 @@ def _tool_input(call: dict[str, Any]) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"value": parsed}
 
 
-def _tool_result_event(name: str, result: ToolResult) -> AgentEvent:
+def _tool_result_event(tool_call_id: str, name: str, result: ToolResult) -> AgentEvent:
     return {
         "type": "tool_result",
+        "tool_call_id": tool_call_id,
         "name": name,
         "result": result.content,
         "is_error": result.is_error,
