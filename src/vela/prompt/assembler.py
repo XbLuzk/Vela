@@ -114,11 +114,7 @@ class PromptAssembler:
         return "\n\n".join(chunks)[:16_000]
 
     def _recalled_memories(self, user_message: str) -> str:
-        if not (
-            user_message.strip()
-            and self.config.features.memory
-            and self.config.memory.long_term_enabled
-        ):
+        if not user_message.strip() or not self.config.features.memory:
             return ""
         manager = MemoryManager(
             self.config.memory.long_term_db_path,

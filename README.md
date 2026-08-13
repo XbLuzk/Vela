@@ -216,9 +216,10 @@ Vela 内置的主要工具：
 | 文件 | `read_file`、`write_file`、`list_dir`、`glob` |
 | 搜索 | `grep` |
 | 命令 | `bash` |
-| 联网 | `web_search`、`web_fetch` |
 | 记忆 | `save_memory`、`search_memory` |
 | Skill | `load_skill` |
+
+联网与浏览器能力统一由 MCP Server 提供，Vela 不再维护一套重复的本地 Web 实现。
 
 写文件、执行命令和远程 MCP 写操作等危险动作会经过 Policy、HITL 和 Audit 处理。
 

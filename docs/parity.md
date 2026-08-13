@@ -65,8 +65,6 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - `glob`
   - `grep`
   - `bash`
-  - `web_search`
-  - `web_fetch`
   - `save_memory`
   - `search_memory`
   - `load_skill`
@@ -95,6 +93,7 @@ This file tracks the Python port against the existing Java and TypeScript implem
   - dynamic `mcp__server__tool` registration
   - virtual resource tools
   - virtual prompt tools
+  - network and browser capabilities supplied by configured MCP servers
   - `vela mcp init-chrome`
   - `vela mcp list`
 - Chrome DevTools MCP:
@@ -133,7 +132,6 @@ The Java implementation has a WeChat iLink channel. Vela intentionally does not 
 
 ## Remaining Public Parity Gaps
 
-- Move built-in `web_search` and `web_fetch` behind MCP, then remove the duplicate local Web path.
 - MCP operations in the interactive CLI: server status, restart, logs, runtime enable/disable,
   resources, and prompts management.
 - Browser session operations: connect/status/tabs/disconnect, isolated/shared switching, and

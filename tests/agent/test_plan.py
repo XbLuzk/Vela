@@ -64,6 +64,20 @@ def test_planner_parses_tasks_and_dependencies():
     assert plan.get_task("task_2").type == TaskType.VERIFICATION
 
 
+def test_planner_uses_model_for_simple_goal():
+    client = ReviewPlanClient()
+    planner = Planner(client)
+
+    async def run():
+        return [event async for event in planner.stream_plan("查看文件")]
+
+    events = asyncio.run(run())
+
+    assert client.plan_requests == 1
+    assert events[-1]["type"] == "plan_created"
+    assert events[-1]["plan"].summary == "review"
+
+
 def test_plan_execute_runs_independent_tasks_in_parallel(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     client = ParallelPlanClient()

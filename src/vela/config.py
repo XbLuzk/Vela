@@ -35,7 +35,6 @@ class ToolsConfig:
 @dataclass(slots=True)
 class MemoryConfig:
     max_conversation_history: int = 100
-    long_term_enabled: bool = True
     long_term_db_path: str = "~/.vela/memory.db"
     max_long_term_entries: int = 1_000
     max_memory_chars: int = 8_000

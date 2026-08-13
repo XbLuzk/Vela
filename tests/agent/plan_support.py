@@ -19,6 +19,19 @@ class FakeClient:
 
 class TwoToolClient(FakeClient):
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        body = _message_text(messages[-1].content)
+        if "请为以下目标创建执行计划" in body:
+            yield {
+                "type": "text_delta",
+                "text": (
+                    '{"summary":"tool run","tasks":['
+                    '{"id":"tools","description":"执行工具","type":"COMMAND",'
+                    '"dependencies":[]}]}'
+                ),
+            }
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+
         for index, name in enumerate(("first_tool", "second_tool")):
             yield {
                 "type": "tool_call_delta",
@@ -248,6 +261,19 @@ class FailingTaskClient(SingleTaskClient):
 
 class JournalResumeClient(FakeClient):
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        body = _message_text(messages[-1].content)
+        if "请为以下目标创建执行计划" in body:
+            yield {
+                "type": "text_delta",
+                "text": (
+                    '{"summary":"recoverable tools","tasks":['
+                    '{"id":"tools","description":"执行可恢复工具","type":"COMMAND",'
+                    '"dependencies":[]}]}'
+                ),
+            }
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+
         if messages[-1].role == "tool":
             yield {"type": "text_delta", "text": "两个工具均已完成"}
             yield {"type": "message_end", "stop_reason": "end_turn"}

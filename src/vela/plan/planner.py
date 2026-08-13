@@ -37,10 +37,6 @@ class Planner:
     async def stream_plan(self, goal: str) -> AsyncIterator[dict[str, Any]]:
         """Create a plan while preserving provider reasoning and usage events."""
         self.last_usage = Usage()
-        if _is_simple_goal(goal):
-            yield {"type": "plan_created", "plan": _minimal_plan(goal)}
-            return
-
         text = ""
         messages = [Message(role="user", content=f"请为以下目标创建执行计划：\n{goal}")]
         async for event in self.llm_client.chat(messages, [], system_prompt=PLANNER_PROMPT):
@@ -120,35 +116,3 @@ def _parse_task_type(value: str) -> TaskType:
         return TaskType(normalized)
     except ValueError:
         return TaskType.ANALYSIS
-
-
-def _is_simple_goal(goal: str | None) -> bool:
-    normalized = (goal or "").strip()
-    if not normalized or len(normalized) > 30:
-        return False
-    multi_step_cues = ["然后", "并且", "再", "最后", "同时", "先", "之后", "接着", "以及"]
-    if any(cue in normalized for cue in multi_step_cues):
-        return False
-    simple_cues = ["列出", "查看", "读取", "显示", "执行", "运行", "搜索", "当前目录", "文件"]
-    return any(cue in normalized for cue in simple_cues)
-
-
-def _minimal_plan(goal: str) -> ExecutionPlan:
-    normalized = goal.strip()
-    plan = ExecutionPlan(id=f"plan_{int(time.time() * 1000)}", goal=normalized)
-    plan.summary = f"直接执行简单任务：{normalized}"
-    plan.add_task(Task(id="task_1", description=normalized, type=_infer_simple_type(normalized)))
-    plan.compute_execution_order()
-    return plan
-
-
-def _infer_simple_type(goal: str) -> TaskType:
-    if any(token in goal for token in ["读取", "打开", "查看"]) and "文件" in goal:
-        return TaskType.FILE_READ
-    if any(token in goal for token in ["写入", "修改", "创建文件"]):
-        return TaskType.FILE_WRITE
-    if any(token in goal for token in ["分析", "总结", "解释"]):
-        return TaskType.ANALYSIS
-    if any(token in goal for token in ["验证", "检查"]):
-        return TaskType.VERIFICATION
-    return TaskType.COMMAND

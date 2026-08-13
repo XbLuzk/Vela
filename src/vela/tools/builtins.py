@@ -11,7 +11,6 @@ from vela.tools import file_ops as fops
 from vela.tools.base import Tool, ToolContext, ToolResult, object_schema
 from vela.tools.file_ops import FileOpResult
 from vela.tools.process import stop_subprocess
-from vela.web import fetch_url, search_web
 
 
 def get_builtin_tools() -> list[Tool]:
@@ -19,7 +18,7 @@ def get_builtin_tools() -> list[Tool]:
 
     return [
         *_workspace_tools(),
-        *_shell_and_web_tools(),
+        *_shell_tools(),
         *_memory_and_skill_tools(),
     ]
 
@@ -169,7 +168,7 @@ def _workspace_tools() -> list[Tool]:
     ]
 
 
-def _shell_and_web_tools() -> list[Tool]:
+def _shell_tools() -> list[Tool]:
     return [
         Tool(
             name="bash",
@@ -187,34 +186,6 @@ def _shell_and_web_tools() -> list[Tool]:
             is_concurrency_safe=False,
             danger_level="high",
             requires_approval=True,
-        ),
-        Tool(
-            name="web_search",
-            description=(
-                "Search the web for current information. Returns titles, URLs, and snippets."
-            ),
-            parameters=object_schema(
-                {
-                    "query": {"type": "string", "description": "Search query"},
-                    "max_results": {"type": "number", "description": "Maximum result count"},
-                },
-                ["query"],
-            ),
-            required_keys=["query"],
-            handler=_web_search,
-        ),
-        Tool(
-            name="web_fetch",
-            description="Fetch a public HTTP/HTTPS page and return readable text.",
-            parameters=object_schema(
-                {
-                    "url": {"type": "string", "description": "URL to fetch"},
-                    "max_length": {"type": "number", "description": "Maximum returned characters"},
-                },
-                ["url"],
-            ),
-            required_keys=["url"],
-            handler=_web_fetch,
         ),
     ]
 
@@ -433,41 +404,12 @@ async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
 
 
 # ---------------------------------------------------------------------------
-# Handler: web
-# ---------------------------------------------------------------------------
-
-
-async def _web_search(payload: dict[str, Any], _context: ToolContext) -> ToolResult:
-    max_results = int(payload.get("max_results") or payload.get("maxResults") or 5)
-    try:
-        results = await search_web(str(payload["query"]), max_results=max_results)
-    except Exception as exc:  # noqa: BLE001
-        return ToolResult(f"Search error: {exc}", is_error=True)
-    if not results:
-        return ToolResult(f'No search results found for "{payload["query"]}".')
-    content = "\n\n".join(
-        f"{index}. {result.title}\n{result.url}\n{result.snippet}"
-        for index, result in enumerate(results, start=1)
-    )
-    return ToolResult(content, display_summary=f"Search: {len(results)} results")
-
-
-async def _web_fetch(payload: dict[str, Any], _context: ToolContext) -> ToolResult:
-    max_length = int(payload.get("max_length") or payload.get("maxLength") or 10_000)
-    try:
-        content = await fetch_url(str(payload["url"]), max_length=max_length)
-    except Exception as exc:  # noqa: BLE001
-        return ToolResult(f"Fetch error: {exc}", is_error=True)
-    return ToolResult(content, display_summary=f"Fetched {payload['url']}")
-
-
-# ---------------------------------------------------------------------------
 # Handler: memory
 # ---------------------------------------------------------------------------
 
 
 async def _save_memory(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    if not context.config.features.memory or not context.config.memory.long_term_enabled:
+    if not context.config.features.memory:
         return ToolResult("Long-term memory is disabled.", is_error=True)
     manager = MemoryManager(
         context.config.memory.long_term_db_path,
@@ -487,7 +429,7 @@ async def _save_memory(payload: dict[str, Any], context: ToolContext) -> ToolRes
 
 
 async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    if not context.config.features.memory or not context.config.memory.long_term_enabled:
+    if not context.config.features.memory:
         return ToolResult("Long-term memory is disabled.", is_error=True)
     raw_kinds = payload.get("kinds")
     if raw_kinds is not None and not isinstance(raw_kinds, list):
