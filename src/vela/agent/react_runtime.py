@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from vela.config import VelaConfig
-from vela.context import ContextBudget, ContextWindowManager
+from vela.context import ContextBudget, ContextEngine
 from vela.events import AgentEvent
 from vela.image import parse_image_references
 from vela.llm.base import LlmClient
@@ -78,7 +78,7 @@ async def run_react_agent(
         cwd=cwd,
         config=config,
     )
-    window_manager = _context_manager(llm_client, config)
+    context_engine = _context_engine(llm_client, config)
     tool_executor = ToolExecutor(tool_registry)
     tool_context = ToolContext(
         cwd=cwd,
@@ -95,7 +95,7 @@ async def run_react_agent(
         for turn_number in range(1, max_turns + 1):
             compression_event = _compress_context(
                 transcript,
-                window_manager=window_manager,
+                context_engine=context_engine,
                 system_prompt=effective_system_prompt,
                 tool_definitions=tool_definitions,
                 enabled=config.features.context_compression,
@@ -404,14 +404,14 @@ def _tool_result_event(name: str, result: ToolResult) -> AgentEvent:
 def _compress_context(
     transcript: list[Message],
     *,
-    window_manager: ContextWindowManager,
+    context_engine: ContextEngine,
     system_prompt: str,
     tool_definitions: list[dict[str, Any]],
     enabled: bool,
 ) -> AgentEvent | None:
     if not enabled:
         return None
-    compression = window_manager.prepare(
+    compression = context_engine.prepare(
         transcript,
         system_prompt=system_prompt,
         tool_definitions=tool_definitions,
@@ -424,6 +424,8 @@ def _compress_context(
         "before_tokens": compression.estimated_tokens_before,
         "after_tokens": compression.estimated_tokens_after,
         "summarized_messages": compression.summarized_messages,
+        "truncated_tool_results": compression.truncated_tool_results,
+        "omitted_tool_characters": compression.omitted_tool_characters,
     }
 
 
@@ -446,8 +448,8 @@ def _build_system_prompt(
     return f"{base}\n\n{dynamic}".strip()
 
 
-def _context_manager(llm_client: LlmClient, config: VelaConfig) -> ContextWindowManager:
-    return ContextWindowManager(
+def _context_engine(llm_client: LlmClient, config: VelaConfig) -> ContextEngine:
+    return ContextEngine(
         ContextBudget(
             context_window=llm_client.max_context_window,
             max_output_tokens=config.llm.max_tokens,

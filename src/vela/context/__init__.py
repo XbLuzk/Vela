@@ -1,15 +1,15 @@
 from vela.context.manager import (
-    CompressionResult,
     ContextBudget,
-    ContextWindowManager,
+    ContextEngine,
+    ContextResult,
     estimate_message_tokens,
     estimate_text_tokens,
 )
 
 __all__ = [
-    "CompressionResult",
     "ContextBudget",
-    "ContextWindowManager",
+    "ContextEngine",
+    "ContextResult",
     "estimate_message_tokens",
     "estimate_text_tokens",
 ]

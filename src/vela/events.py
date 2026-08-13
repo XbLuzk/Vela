@@ -92,6 +92,8 @@ class AgentEvent(_AgentEventBase, total=False):
     before_tokens: int
     after_tokens: int
     summarized_messages: int
+    truncated_tool_results: int
+    omitted_tool_characters: int
     interrupt: dict[str, Any]
     pending_tasks: int
     task_id: str
