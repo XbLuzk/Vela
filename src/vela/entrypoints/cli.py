@@ -38,6 +38,11 @@ from vela.agent import Agent
 from vela.bootstrap import build_tool_registry
 from vela.branding import CLI_NAME, PRODUCT_NAME
 from vela.config import get_config_paths, load_config
+from vela.entrypoints.eval_command import (
+    compare_eval_files,
+    format_eval_summary,
+    run_eval_suite,
+)
 from vela.entrypoints.repl import start_repl
 from vela.entrypoints.trace_command import show_run_traces
 from vela.llm import create_llm_client
@@ -51,7 +56,9 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 mcp_app = typer.Typer(help="External MCP server management")
+eval_app = typer.Typer(help="Repeatable Agent task evaluation")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(eval_app, name="eval")
 console = Console()
 
 
@@ -205,6 +212,47 @@ def trace_command(
         json_output=json_output,
     )
     if store.last_warning or (reference and not found):
+        raise typer.Exit(1)
+
+
+@eval_app.command("run")
+def eval_run(
+    suite: Annotated[Path, typer.Argument(help="JSON evaluation suite")],
+    cwd: Annotated[Path | None, typer.Option("--cwd", help="Project root")] = None,
+    output: Annotated[Path | None, typer.Option("--output", help="Result JSON path")] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option("--workspace", help="Directory for isolated case workspaces"),
+    ] = None,
+) -> None:
+    """Run fixed tasks and record success, latency, tokens, and tool calls."""
+    root = (cwd or Path.cwd()).resolve()
+    config = load_config(project_root=root)
+    if not config.llm.api_key:
+        raise typer.BadParameter("LLM API key is required to run an evaluation")
+    target, result = asyncio.run(
+        run_eval_suite(
+            suite.resolve(),
+            project_root=root,
+            config=config,
+            output=output.resolve() if output else None,
+            workspace_root=workspace.resolve() if workspace else None,
+        )
+    )
+    typer.echo(format_eval_summary(result, target))
+    if float(result["success_rate"]) < 1:
+        raise typer.Exit(1)
+
+
+@eval_app.command("compare")
+def eval_compare(
+    baseline: Annotated[Path, typer.Argument(help="Baseline result JSON")],
+    current: Annotated[Path, typer.Argument(help="Current result JSON")],
+) -> None:
+    """Compare two evaluation runs and fail when a case regresses."""
+    comparison = compare_eval_files(baseline.resolve(), current.resolve())
+    typer.echo(json.dumps(comparison, ensure_ascii=False, indent=2))
+    if comparison["regressions"]:
         raise typer.Exit(1)
 
 
