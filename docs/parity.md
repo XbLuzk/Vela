@@ -43,7 +43,7 @@ This file tracks the Python port against the existing Java and TypeScript implem
 - Agent:
   - OpenAI-compatible streaming LLM client
   - DeepSeek default
-  - ReAct loop with text/thinking/tool-call/tool-result/done events
+  - LangChain ReAct runtime with Vela text/thinking/tool-call/tool-result/done events
   - LangGraph-only Plan-and-Execute agent with `StateGraph`, dynamic `Send` fan-out,
     `Command` routing, native `interrupt()` review, and async SQLite checkpoints
   - session-aligned Graph threads and `/plan --resume` recovery from the last successful batch

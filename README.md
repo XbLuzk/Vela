@@ -9,11 +9,12 @@
   <a href="https://github.com/XbLuzk/Vela/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/XbLuzk/Vela?style=flat-square&amp;logo=github"></a>
   <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/XbLuzk/Vela?style=flat-square"></a>
   <a href="https://docs.langchain.com/oss/python/langgraph/overview"><img alt="LangGraph 1.2+" src="https://img.shields.io/badge/LangGraph-1.2%2B-1C3C3C?style=flat-square"></a>
+  <a href="https://docs.langchain.com/oss/python/langchain/overview"><img alt="LangChain 1.3+" src="https://img.shields.io/badge/LangChain-1.3%2B-1C3C3C?style=flat-square"></a>
   <a href="https://modelcontextprotocol.io/docs/getting-started/intro"><img alt="MCP compatible" src="https://img.shields.io/badge/MCP-compatible-7C3AED?style=flat-square"></a>
 </p>
 
 <p align="center">
-  ReAct · LangGraph Plan · MCP · Skills · Memory · Multimodal
+  LangChain ReAct · LangGraph Plan · MCP · Skills · Memory · Multimodal
 </p>
 
 <p align="center">
@@ -27,6 +28,9 @@ Vela 是一个运行在终端中的 AI Agent。它能够读取和修改文件、
 MCP 工具、管理长期记忆，并通过可恢复的 Session、LangGraph Checkpoint 和工具执行日志处理
 长任务与中断恢复。
 
+普通任务由 LangChain Agent Graph 驱动 ReAct 循环；复杂任务由 LangGraph 编排 Plan DAG。
+两种模式共用 Vela 的模型适配、工具安全策略、执行日志、Session 和终端事件协议。
+
 第一次阅读 Python Agent 项目，可以从 [Vela 代码阅读路线](docs/code-guide.md) 开始，只跟普通
 ReAct 请求的五步主链路，再逐步进入 Plan、Session 和终端 UI。
 
@@ -34,7 +38,7 @@ ReAct 请求的五步主链路，再逐步进入 Plan、Session 和终端 UI。
 
 | 能力 | 说明 |
 | --- | --- |
-| Agent 运行时 | 支持 ReAct 和可恢复的 LangGraph Plan-and-Execute |
+| Agent 运行时 | LangChain ReAct 与可恢复的 LangGraph Plan-and-Execute |
 | 任务恢复 | 项目级持久化 Session、任务取消、Graph Checkpoint 和工具结果重放 |
 | 工具系统 | 文件、Shell、代码搜索、网页检索、记忆、Skill 和 MCP 工具 |
 | 安全控制 | HITL 人工确认、路径与命令策略、JSONL 审计日志和会话级权限切换 |

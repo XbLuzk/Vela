@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
+from vela.agent.langchain_runtime import run_langchain_agent
 from vela.agent.plan_graph import LangGraphPlanAgent
-from vela.agent.query import run_react_loop
 from vela.config import VelaConfig
 from vela.llm.base import LlmClient
 from vela.prompt import PromptAssembler
@@ -125,13 +125,12 @@ class Agent:
 
     async def _run_react(self, message: str) -> AsyncIterator[dict[str, Any]]:
         """Standard ReAct loop (the default and most common mode)."""
-        async for event in run_react_loop(
+        async for event in run_langchain_agent(
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
             system_prompt=self.system_prompt,
             user_message=message,
             history=self.history,
-            history_sink=self.history,
             cwd=self.cwd,
             config=self.config,
             approval_callback=self.approval_callback,

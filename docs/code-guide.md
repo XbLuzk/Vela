@@ -11,18 +11,18 @@
 2. `src/vela/entrypoints/repl.py::start_repl`：组装模型、工具、Agent 和 Session。
 3. `src/vela/entrypoints/repl.py::_repl_loop`：读取用户输入并启动当前任务。
 4. `src/vela/agent/agent.py::Agent.run`：根据 `react / plan` 选择执行方式。
-5. `src/vela/agent/query.py::run_react_loop`：执行“模型回复 → 工具调用 → 工具结果 → 再次回复”。
+5. `src/vela/agent/langchain_runtime.py::run_langchain_agent`：启动 LangChain Agent Graph，执行“模型回复 → 工具调用 → 工具结果 → 再次回复”。
 
 先忽略界面样式、MCP、Memory 和恢复逻辑。能解释这五步，就已经理解了项目最核心的运行链路。
 
 ## 2. ReAct 循环怎么读
 
-`run_react_loop()` 可以按四段理解：
+`run_langchain_agent()` 可以按四段理解：
 
 1. 把历史消息、本次请求、Skill 和系统提示词组装成模型输入。
-2. 流式读取模型事件，累积文本、Token 用量和工具调用参数。
-3. 如果模型请求工具，交给 `src/vela/tools/executor.py::ToolExecutor.execute_stream`。
-4. 把工具结果追加到消息列表，进入下一轮；没有工具调用时结束。
+2. `create_agent()` 管理模型与工具之间的标准 ReAct 循环。
+3. `VelaChatModel` 保留模型流式协议，`VelaToolMiddleware` 继续调用 `ToolExecutor`。
+4. LangChain 回填工具结果，Vela 同步 Session 历史并输出终端事件。
 
 工具本身分两层：
 
@@ -36,7 +36,7 @@
 - Plan：`src/vela/agent/plan_graph.py::LangGraphPlanAgent.run`
   - Planner 生成 DAG。
   - LangGraph 保存状态、等待人工确认并并行派发可执行节点。
-  - 每个节点仍然复用 `run_react_loop()`，不是另一套工具系统。
+  - 每个节点仍然复用 `run_langchain_agent()`，不是另一套工具系统。
 
 ## 4. 最后补持久化和终端 UI
 
