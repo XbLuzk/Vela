@@ -24,6 +24,9 @@
 3. `VelaChatModel` 保留模型流式协议，`VelaToolMiddleware` 继续调用 `ToolExecutor`。
 4. LangChain 回填工具结果，Vela 同步 Session 历史并输出终端事件。
 
+`src/vela/events.py` 用 `AgentEvent` 和 `LlmEvent` 两个 TypedDict 集中声明事件名称和字段；
+阅读事件流时先看 `type`，再查看该事件使用的可选字段。
+
 工具本身分两层：
 
 - `src/vela/tools/builtins.py` 只声明工具名称、参数和处理函数。

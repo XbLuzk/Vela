@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://www.python.org/downloads/"><img alt="Python 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
   <a href="https://github.com/XbLuzk/Vela/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/XbLuzk/Vela?style=flat-square&amp;logo=github"></a>
+  <a href="https://github.com/XbLuzk/Vela/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/XbLuzk/Vela/ci.yml?branch=main&amp;style=flat-square&amp;label=CI"></a>
   <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/XbLuzk/Vela?style=flat-square"></a>
   <a href="https://docs.langchain.com/oss/python/langgraph/overview"><img alt="LangGraph 1.2+" src="https://img.shields.io/badge/LangGraph-1.2%2B-1C3C3C?style=flat-square"></a>
   <a href="https://docs.langchain.com/oss/python/langchain/overview"><img alt="LangChain 1.3+" src="https://img.shields.io/badge/LangChain-1.3%2B-1C3C3C?style=flat-square"></a>
@@ -40,7 +41,7 @@ ReAct 请求的五步主链路，再逐步进入 Plan、Session 和终端 UI。
 | --- | --- |
 | Agent 运行时 | LangChain ReAct 与可恢复的 LangGraph Plan-and-Execute |
 | 任务恢复 | 项目级持久化 Session、任务取消、Graph Checkpoint 和工具结果重放 |
-| 工具系统 | 文件、Shell、代码搜索、网页检索、记忆、Skill 和 MCP 工具 |
+| 工具系统 | 文件、Shell、代码搜索、记忆、Skill 和 MCP 扩展工具 |
 | 安全控制 | HITL 人工确认、路径与命令策略、JSONL 审计日志和会话级权限切换 |
 | 上下文管理 | 静态项目指令、SQLite 长期记忆、相关性召回、Token 预算和上下文压缩 |
 | 多模态输入 | 支持本地图片、远程图片、`@image` 引用和 macOS 剪贴板图片 |
@@ -293,6 +294,9 @@ Vela 可以连接 stdio 或 Streamable HTTP MCP Server，并将远程工具注�
 mcp__<server-name>__<tool-name>
 ```
 
+stdio MCP 默认不会继承 Vela 进程中的 API Key、Token 和 Secret；服务器需要凭证时，请在
+`mcp.json` 的 `env` 中显式配置。
+
 初始化项目级 Chrome DevTools MCP：
 
 ```bash
@@ -337,8 +341,11 @@ uv run vela doctor --cwd .
 uv run vela -p hello
 ```
 
-贡献流程与 Pull Request 要求见 [贡献指南](CONTRIBUTING.md)。能力范围和实现状态见
-[对齐说明](docs/parity.md)。
+需要真实模型、MCP 或浏览器的验收不会在 Pull Request 中自动运行，具体方式见
+[测试与 Live 验收](docs/testing.md)。
+
+贡献流程与 Pull Request 要求见 [贡献指南](CONTRIBUTING.md)，后续方向见
+[Vela Roadmap](docs/roadmap.md)。
 
 ## 来源与许可
 
