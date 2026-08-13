@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from vela.entrypoints.repl_ui import (
     permission_key_bindings,
     prompt_message,
 )
+from vela.events import AgentEvent
 from vela.llm import create_llm_client
 from vela.render import RichRenderer
 from vela.session import ActiveSession, finalize_interrupted_history
@@ -303,7 +305,7 @@ async def _run_agent_with_session(
 
 
 async def _run_events(
-    events,
+    events: AsyncIterable[AgentEvent],
     renderer: RichRenderer,
     context_window: int | None = None,
     task_controller: InteractiveTaskController | None = None,

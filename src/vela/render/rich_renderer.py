@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from vela.branding import PRODUCT_NAME
+from vela.events import AgentEvent
 
 RICH_STYLE_RULES = {
     "accent": "bold blue",
@@ -96,7 +97,7 @@ class RichRenderer:
         self.console.rule(style="grey23")
         self.console.print()
 
-    def handle(self, event: dict[str, Any]) -> None:
+    def handle(self, event: AgentEvent) -> None:
         event_type = event.get("type")
         if event_type == "text_delta":
             self._flush_thinking()
@@ -263,7 +264,7 @@ class RichRenderer:
         if input_tokens:
             self._last_input_tokens = input_tokens
 
-    def _print_tool_call(self, event: dict[str, Any]) -> None:
+    def _print_tool_call(self, event: AgentEvent) -> None:
         name = str(event.get("name") or "unknown")
         payload = event.get("input") or {}
         body = Table.grid(padding=(0, 1))
@@ -279,7 +280,7 @@ class RichRenderer:
             )
         )
 
-    def _print_tool_result(self, event: dict[str, Any]) -> None:
+    def _print_tool_result(self, event: AgentEvent) -> None:
         is_error = bool(event.get("is_error"))
         name = str(event.get("name") or "unknown")
         result = str(event.get("result") or "")
@@ -302,7 +303,7 @@ class RichRenderer:
             )
         )
 
-    def _record_run_summary(self, event: dict[str, Any]) -> None:
+    def _record_run_summary(self, event: AgentEvent) -> None:
         total_tokens = int(event.get("total_tokens") or self._input_tokens + self._output_tokens)
         turns = int(event.get("total_turns") or 0)
         has_usage = total_tokens > 0 or self._input_tokens > 0 or self._output_tokens > 0
@@ -370,7 +371,7 @@ def _format_payload(payload: Any) -> str:
         return str(payload)
 
 
-def _thinking_scope(event: dict[str, Any]) -> str | None:
+def _thinking_scope(event: AgentEvent) -> str | None:
     task_id = str(event.get("task_id") or "").strip()
     if task_id:
         return task_id
@@ -387,7 +388,7 @@ def _thinking_title(scope: str | None) -> str:
     return "Thinking"
 
 
-def _scoped_title(title: str, event: dict[str, Any]) -> str:
+def _scoped_title(title: str, event: AgentEvent) -> str:
     task_id = str(event.get("task_id") or "").strip()
     return f"{title} · {task_id}" if task_id else title
 

@@ -8,6 +8,7 @@ from typing import Any, Literal
 from vela.agent.langchain_runtime import run_langchain_agent
 from vela.agent.plan_graph import LangGraphPlanAgent
 from vela.config import VelaConfig
+from vela.events import AgentEvent
 from vela.llm.base import LlmClient
 from vela.prompt import PromptAssembler
 from vela.skill import SkillContextBuffer
@@ -84,7 +85,7 @@ class Agent:
     # Public API — run the agent
     # ------------------------------------------------------------------
 
-    async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
+    async def run(self, message: str) -> AsyncIterator[AgentEvent]:
         """Run one request in the selected mode and yield progress events."""
         runner = self._run_plan if self.mode == "plan" else self._run_react
 
@@ -123,7 +124,7 @@ class Agent:
     # Mode runners
     # ------------------------------------------------------------------
 
-    async def _run_react(self, message: str) -> AsyncIterator[dict[str, Any]]:
+    async def _run_react(self, message: str) -> AsyncIterator[AgentEvent]:
         """Standard ReAct loop (the default and most common mode)."""
         async for event in run_langchain_agent(
             llm_client=self.llm_client,
@@ -142,7 +143,7 @@ class Agent:
                 self.last_usage = Usage.from_mapping(event.get("usage") or {})
             yield event
 
-    async def _run_plan(self, message: str) -> AsyncIterator[dict[str, Any]]:
+    async def _run_plan(self, message: str) -> AsyncIterator[AgentEvent]:
         """Plan-then-execute mode: the planner creates a DAG, then workers run it."""
         agent = LangGraphPlanAgent(
             llm_client=self.llm_client,

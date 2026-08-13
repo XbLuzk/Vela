@@ -6,6 +6,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from vela.events import AgentEvent
 from vela.llm.base import LlmClient
 from vela.plan.models import ExecutionPlan, Task, TaskType
 from vela.types import Message, Usage
@@ -34,7 +35,7 @@ class Planner:
         self.llm_client = llm_client
         self.last_usage = Usage()
 
-    async def stream_plan(self, goal: str) -> AsyncIterator[dict[str, Any]]:
+    async def stream_plan(self, goal: str) -> AsyncIterator[AgentEvent]:
         """Create a plan while preserving provider reasoning and usage events."""
         self.last_usage = Usage()
         text = ""

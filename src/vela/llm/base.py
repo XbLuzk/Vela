@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
+from vela.events import LlmEvent
 from vela.types import Message
 
 
@@ -17,4 +18,4 @@ class LlmClient(Protocol):
         tools: list[dict[str, Any]],
         *,
         system_prompt: str,
-    ) -> AsyncIterator[dict[str, Any]]: ...
+    ) -> AsyncIterator[LlmEvent]: ...

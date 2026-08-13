@@ -22,6 +22,7 @@ from vela.agent.langchain_model import (
 from vela.agent.langchain_tools import VelaToolMiddleware, langchain_tools
 from vela.config import VelaConfig
 from vela.context import ContextBudget, ContextWindowManager
+from vela.events import AgentEvent
 from vela.image import parse_image_references
 from vela.llm.base import LlmClient
 from vela.prompt import PromptAssembler
@@ -93,7 +94,7 @@ async def run_langchain_agent(
     tool_execution_scope: str | None = None,
     allow_uncertain_tool_retry: bool = False,
     max_turns: int = 20,
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[AgentEvent]:
     """Run one Vela request through LangChain's standard agent graph."""
 
     original_user_message = user_message
@@ -189,7 +190,7 @@ async def run_langchain_agent(
     }
 
 
-def _streamed_message_event(payload: Any) -> tuple[dict[str, Any] | None, Usage | None]:
+def _streamed_message_event(payload: Any) -> tuple[AgentEvent | None, Usage | None]:
     chunk, metadata = payload
     if metadata.get("langgraph_node") != "model" or not isinstance(chunk, AIMessageChunk):
         return None, None
@@ -206,7 +207,7 @@ def _streamed_message_event(payload: Any) -> tuple[dict[str, Any] | None, Usage 
     return None, None
 
 
-def _turn_complete_event(message: AIMessage, turn: int) -> dict[str, Any]:
+def _turn_complete_event(message: AIMessage, turn: int) -> AgentEvent:
     stop_reason = str(
         message.response_metadata.get("stop_reason")
         or ("tool_use" if message.tool_calls else "end_turn")

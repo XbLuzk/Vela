@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 Role = Literal["system", "user", "assistant", "tool"]
+
+
+class UsagePayload(TypedDict):
+    """Serialized token usage shared by model and Agent events."""
+
+    input_tokens: int
+    output_tokens: int
+    cache_hit_tokens: int
+    cache_miss_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
 
 
 @dataclass(slots=True)
@@ -64,7 +75,7 @@ class Usage:
             total_tokens=_first_int(value, "total_tokens"),
         )
 
-    def to_dict(self) -> dict[str, int]:
+    def to_dict(self) -> UsagePayload:
         return {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,

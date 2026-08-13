@@ -19,6 +19,7 @@ from langgraph.types import Command, Overwrite, Send, interrupt
 
 from vela.agent.langchain_runtime import run_langchain_agent
 from vela.config import VelaConfig
+from vela.events import AgentEvent
 from vela.llm.base import LlmClient
 from vela.plan import ExecutionPlan, Planner, Task, TaskStatus, TaskType
 from vela.prompt import PromptAssembler
@@ -32,7 +33,7 @@ from vela.task_control import (
 )
 from vela.tools.journal import ToolExecutionJournal
 from vela.tools.registry import ToolRegistry
-from vela.types import Message, Usage
+from vela.types import Message, Usage, UsagePayload
 
 
 class PlanGraphState(TypedDict, total=False):
@@ -40,7 +41,7 @@ class PlanGraphState(TypedDict, total=False):
     planning_goal: str
     plan: dict[str, Any]
     task_results: Annotated[list[dict[str, Any]], operator.add]
-    usage_events: Annotated[list[dict[str, Any]], operator.add]
+    usage_events: Annotated[list[UsagePayload], operator.add]
     review_required: bool
     execution_started: bool
     status: str
@@ -94,7 +95,7 @@ class LangGraphPlanAgent:
         self.history: list[Message] = []
         self._allow_uncertain_tool_retry = False
 
-    async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
+    async def run(self, message: str) -> AsyncIterator[AgentEvent]:
         self.history = [Message(role="user", content=message or "继续之前的计划")]
         try:
             async with _open_checkpointer(
@@ -181,7 +182,7 @@ class LangGraphPlanAgent:
         graph: Any,
         graph_input: dict[str, Any] | Command | None,
         graph_config: dict[str, Any],
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[AgentEvent]:
         while True:
             interruption: dict[str, Any] | None = None
             async for mode, chunk in graph.astream(
@@ -205,7 +206,7 @@ class LangGraphPlanAgent:
             decision = await resolve_plan_review(self.plan_review_callback, plan)
             graph_input = Command(resume=_decision_payload(decision))
 
-    def _finish_graph(self, values: dict[str, Any]) -> dict[str, Any]:
+    def _finish_graph(self, values: dict[str, Any]) -> AgentEvent:
         final_text = str(values.get("final_text") or "")
         if final_text:
             self.history.append(Message(role="assistant", content=final_text))
@@ -265,7 +266,7 @@ class LangGraphPlanAgent:
         writer({"type": "text_delta", "text": f"正在规划任务：{planning_goal}\n\n"})
         writer({"type": "plan_status", "phase": "planning"})
         plan: ExecutionPlan | None = None
-        usage_events: list[dict[str, Any]] = []
+        usage_events: list[UsagePayload] = []
         async for event in self.planner.stream_plan(planning_goal):
             if event.get("type") == "plan_created":
                 plan = event["plan"]
@@ -569,7 +570,7 @@ def _latest_results(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {str(result.get("task_id")): result for result in results}
 
 
-def _with_task_context(event: dict[str, Any], task: Task) -> dict[str, Any]:
+def _with_task_context(event: AgentEvent, task: Task) -> AgentEvent:
     return {
         **event,
         "phase": "execution",
@@ -621,7 +622,7 @@ def _preview(text: str, max_len: int = 160) -> str:
     return value[: max_len - 3] + "..."
 
 
-def _sum_usage(events: list[dict[str, Any]]) -> Usage:
+def _sum_usage(events: list[UsagePayload]) -> Usage:
     total = Usage()
     for event in events:
         total = total + Usage.from_mapping(event)

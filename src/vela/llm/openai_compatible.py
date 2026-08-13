@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from vela.branding import USER_AGENT
+from vela.events import LlmEvent
 from vela.types import Message, Usage
 
 
@@ -40,7 +41,7 @@ class OpenAICompatibleClient:
         tools: list[dict[str, Any]],
         *,
         system_prompt: str,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[LlmEvent]:
         if not self.api_key:
             yield {
                 "type": "error",
@@ -164,7 +165,7 @@ class OpenAICompatibleClient:
                 text_parts.append(f"[Image omitted: {source}, {width}x{height}]")
         return "\n".join(text_parts)
 
-    async def _parse_chunk(self, chunk: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+    async def _parse_chunk(self, chunk: dict[str, Any]) -> AsyncIterator[LlmEvent]:
         choices = chunk.get("choices") or []
         if choices:
             choice = choices[0]

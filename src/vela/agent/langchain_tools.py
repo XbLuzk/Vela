@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from vela.agent.langchain_model import to_openai_tool_call
+from vela.events import AgentEvent
 from vela.tools.base import ToolContext, ToolResult
 from vela.tools.executor import ToolExecutor
 from vela.tools.registry import ToolRegistry
@@ -129,7 +130,7 @@ def langchain_tools(registry: ToolRegistry) -> list[StructuredTool]:
     ]
 
 
-def _tool_result_event(name: str, content: str, result: ToolResult) -> dict[str, Any]:
+def _tool_result_event(name: str, content: str, result: ToolResult) -> AgentEvent:
     return {
         "type": "tool_result",
         "name": name,
