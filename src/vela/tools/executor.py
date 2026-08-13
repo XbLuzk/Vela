@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 from vela.policy import AuditLog
 from vela.tools.base import Tool, ToolContext, ToolDecision, ToolResult
 from vela.tools.journal import ToolExecutionJournal, execution_identity
 from vela.tools.registry import ToolRegistry
+
+
+@dataclass(slots=True)
+class _MutationExecution:
+    """Durable identity for one state-changing tool call."""
+
+    journal: ToolExecutionJournal
+    key: str
+    input_hash: str
 
 
 class ToolExecutor:
@@ -90,92 +100,43 @@ class ToolExecutor:
 
         audit = AuditLog(context.config.policy.audit_log_path)
         approver = "none"
-        journal: ToolExecutionJournal | None = None
-        execution_key = ""
+        mutation: _MutationExecution | None = None
         execution_claimed = False
         try:
-            # 1. Validate input and recover any durable result from an earlier run.
             data = tool.validate(payload)
-            if context.execution_scope and not tool.is_read_only:
-                execution_key, input_hash = execution_identity(
-                    context.execution_scope,
+            mutation, recovered = await self._prepare_mutation(
+                tool,
+                data,
+                context,
+                sequence,
+                tool_call_id,
+            )
+            if recovered is not None:
+                return recovered
+
+            approver, denied = await self._authorize(
+                tool,
+                data,
+                context,
+                audit,
+                tool_call_id,
+            )
+            if denied is not None:
+                return denied
+
+            if mutation is not None:
+                blocked = self._claim_mutation(
+                    mutation,
+                    tool,
+                    context,
                     sequence,
-                    tool.name,
-                    data,
+                    tool_call_id,
                 )
-                journal_path = context.config.tools.execution_journal_path
-                journal = self._journals.get(journal_path)
-                if journal is None:
-                    journal = ToolExecutionJournal(journal_path)
-                    self._journals[journal_path] = journal
-                existing = journal.get(execution_key)
-                if existing is not None and existing.status == "completed":
-                    return _replayed_result(existing.result, tool_call_id, execution_key)
-                if existing is not None and existing.status in {"running", "uncertain"}:
-                    reconciled = await _reconcile(tool, data, context)
-                    if reconciled is not None:
-                        reconciled.tool_use_id = tool_call_id
-                        reconciled.replayed = True
-                        reconciled.execution_key = execution_key
-                        reconciled.recovery_status = reconciled.recovery_status or "reconciled"
-                        journal.complete(execution_key, reconciled)
-                        return reconciled
-
-            # 2. Apply the current approval policy before claiming a new mutation.
-            decision = await self._approval_decision(tool, data, context)
-            if decision in {"deny", "skip"}:
-                approver = "hitl"
-                audit.record(
-                    tool_name=tool.name,
-                    input_data=data,
-                    outcome=decision,
-                    approver=approver,
-                    cwd=context.cwd,
-                )
-                return ToolResult(
-                    tool_use_id=tool_call_id,
-                    content=f'Tool "{tool.name}" was {decision}ed by approval policy.',
-                    is_error=True,
-                )
-            if tool.requires_approval or context.config.policy.hitl_mode == "always":
-                approver = "hitl"
-
-            # 3. Claim this mutation so resume cannot silently execute it twice.
-            if journal is not None:
-                claim = journal.claim(
-                    execution_key=execution_key,
-                    scope=str(context.execution_scope),
-                    sequence=sequence,
-                    tool_name=tool.name,
-                    input_hash=input_hash,
-                    allow_uncertain_retry=context.allow_uncertain_retry,
-                )
-                if claim.action == "replay":
-                    return _replayed_result(claim.record.result, tool_call_id, execution_key)
-                if claim.action == "uncertain":
-                    return ToolResult(
-                        tool_use_id=tool_call_id,
-                        content=(
-                            f'Tool "{tool.name}" has an uncertain previous execution. '
-                            "Resume the Plan and explicitly confirm retry before running it again."
-                        ),
-                        is_error=True,
-                        execution_key=execution_key,
-                        recovery_status="uncertain",
-                    )
+                if blocked is not None:
+                    return blocked
                 execution_claimed = True
 
-            # 4. Execute the tool, then persist and audit its final outcome.
-            try:
-                result = await tool.execute(data, context)
-            except asyncio.CancelledError:
-                if journal is not None:
-                    journal.mark_uncertain(execution_key)
-                raise
-            result.tool_use_id = tool_call_id
-            result.execution_key = execution_key or None
-            if journal is not None:
-                journal.complete(execution_key, result)
+            result = await self._run_tool(tool, data, context, tool_call_id, mutation)
             if not tool.is_read_only and context.config.features.audit_log:
                 audit.record(
                     tool_name=tool.name,
@@ -186,7 +147,7 @@ class ToolExecutor:
                 )
             return result
         except Exception as exc:  # noqa: BLE001 - tool errors must flow back to the model
-            if context.config.features.audit_log and tool and not tool.is_read_only:
+            if context.config.features.audit_log and not tool.is_read_only:
                 audit.record(
                     tool_name=tool.name,
                     input_data=payload,
@@ -198,12 +159,131 @@ class ToolExecutor:
                 tool_use_id=tool_call_id,
                 content=f'Tool "{name}" execution error: {exc}',
                 is_error=True,
-                execution_key=execution_key or None,
+                execution_key=mutation.key if mutation is not None else None,
                 recovery_status="uncertain" if execution_claimed else None,
             )
-            if journal is not None and execution_claimed:
-                journal.mark_uncertain(execution_key)
+            if mutation is not None and execution_claimed:
+                mutation.journal.mark_uncertain(mutation.key)
             return result
+
+    async def _prepare_mutation(
+        self,
+        tool: Tool,
+        payload: dict[str, Any],
+        context: ToolContext,
+        sequence: int,
+        tool_call_id: str,
+    ) -> tuple[_MutationExecution | None, ToolResult | None]:
+        if not context.execution_scope or tool.is_read_only:
+            return None, None
+
+        key, input_hash = execution_identity(
+            context.execution_scope,
+            sequence,
+            tool.name,
+            payload,
+        )
+        journal = self._journal(context.config.tools.execution_journal_path)
+        mutation = _MutationExecution(journal=journal, key=key, input_hash=input_hash)
+        existing = journal.get(key)
+        if existing is not None and existing.status == "completed":
+            return mutation, _replayed_result(existing.result, tool_call_id, key)
+        if existing is None or existing.status not in {"running", "uncertain"}:
+            return mutation, None
+
+        reconciled = await _reconcile(tool, payload, context)
+        if reconciled is None:
+            return mutation, None
+        reconciled.tool_use_id = tool_call_id
+        reconciled.replayed = True
+        reconciled.execution_key = key
+        reconciled.recovery_status = reconciled.recovery_status or "reconciled"
+        journal.complete(key, reconciled)
+        return mutation, reconciled
+
+    def _claim_mutation(
+        self,
+        mutation: _MutationExecution,
+        tool: Tool,
+        context: ToolContext,
+        sequence: int,
+        tool_call_id: str,
+    ) -> ToolResult | None:
+        claim = mutation.journal.claim(
+            execution_key=mutation.key,
+            scope=str(context.execution_scope),
+            sequence=sequence,
+            tool_name=tool.name,
+            input_hash=mutation.input_hash,
+            allow_uncertain_retry=context.allow_uncertain_retry,
+        )
+        if claim.action == "replay":
+            return _replayed_result(claim.record.result, tool_call_id, mutation.key)
+        if claim.action == "uncertain":
+            return ToolResult(
+                tool_use_id=tool_call_id,
+                content=(
+                    f'Tool "{tool.name}" has an uncertain previous execution. '
+                    "Resume the Plan and explicitly confirm retry before running it again."
+                ),
+                is_error=True,
+                execution_key=mutation.key,
+                recovery_status="uncertain",
+            )
+        return None
+
+    async def _run_tool(
+        self,
+        tool: Tool,
+        payload: dict[str, Any],
+        context: ToolContext,
+        tool_call_id: str,
+        mutation: _MutationExecution | None,
+    ) -> ToolResult:
+        try:
+            result = await tool.execute(payload, context)
+        except asyncio.CancelledError:
+            if mutation is not None:
+                mutation.journal.mark_uncertain(mutation.key)
+            raise
+        result.tool_use_id = tool_call_id
+        result.execution_key = mutation.key if mutation is not None else None
+        if mutation is not None:
+            mutation.journal.complete(mutation.key, result)
+        return result
+
+    def _journal(self, path: str) -> ToolExecutionJournal:
+        journal = self._journals.get(path)
+        if journal is None:
+            journal = ToolExecutionJournal(path)
+            self._journals[path] = journal
+        return journal
+
+    async def _authorize(
+        self,
+        tool: Tool,
+        payload: dict[str, Any],
+        context: ToolContext,
+        audit: AuditLog,
+        tool_call_id: str,
+    ) -> tuple[str, ToolResult | None]:
+        decision = await self._approval_decision(tool, payload, context)
+        if decision not in {"deny", "skip"}:
+            uses_hitl = tool.requires_approval or context.config.policy.hitl_mode == "always"
+            return ("hitl" if uses_hitl else "none"), None
+
+        audit.record(
+            tool_name=tool.name,
+            input_data=payload,
+            outcome=decision,
+            approver="hitl",
+            cwd=context.cwd,
+        )
+        return "hitl", ToolResult(
+            tool_use_id=tool_call_id,
+            content=f'Tool "{tool.name}" was {decision}ed by approval policy.',
+            is_error=True,
+        )
 
     async def _approval_decision(
         self,

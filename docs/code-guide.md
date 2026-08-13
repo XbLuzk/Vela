@@ -35,14 +35,19 @@
 
 - Plan：`src/vela/agent/plan_graph.py::LangGraphPlanAgent.run`
   - Planner 生成 DAG。
+  - `run()` 只串联“准备输入 → 流式执行 → 收尾”三步，恢复确认和 Journal 清理分别由小函数负责。
   - LangGraph 保存状态、等待人工确认并并行派发可执行节点。
   - 每个节点仍然复用 `run_langchain_agent()`，不是另一套工具系统。
+
+工具执行入口是 `src/vela/tools/executor.py::ToolExecutor._execute_single`。按顺序读它调用的
+`_prepare_mutation()`、`_claim_mutation()` 和 `_run_tool()`，就能区分恢复、占位和真正执行三个阶段。
 
 ## 4. 最后补持久化和终端 UI
 
 - `src/vela/session.py`：保存和恢复对话消息。
 - `src/vela/tools/journal.py`：记录有副作用的工具调用，恢复时避免重复执行已完成操作。
 - `src/vela/task_control.py`：管理 planning、running、cancelled 等前台任务状态。
+- `src/vela/entrypoints/repl_commands.py`：实现配置、上下文、Memory、Skill 等斜杠命令。
 - `src/vela/entrypoints/repl_ui.py`：输入框、快捷键和底部状态栏；它不参与 Agent 决策。
 - `src/vela/render/rich_renderer.py`：把 Agent 事件显示到终端。
 

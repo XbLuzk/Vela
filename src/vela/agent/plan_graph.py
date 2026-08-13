@@ -105,112 +105,139 @@ class LangGraphPlanAgent:
                     "configurable": {"thread_id": self.thread_id},
                     "recursion_limit": 100,
                 }
-                graph_input: dict[str, Any] | Command | None
-                if self.resume:
-                    saved = await graph.aget_state(graph_config)
-                    if not saved.next:
-                        raise ValueError("当前 Session 没有可恢复的 LangGraph Plan")
-                    pending_execution = [
-                        task for task in saved.tasks if task.name == "execute_task"
-                    ]
-                    if pending_execution:
-                        plan = _plan_from_payload(dict(saved.values).get("plan") or {})
-                        yield {
-                            "type": "text_delta",
-                            "text": (
-                                "检测到未完成的执行节点。该节点中的工具可能已经产生部分副作用，"
-                                "继续时会重放已完成的工具，并仅重试无法对账的不确定调用；"
-                                "请确认后再恢复。\n\n"
-                            ),
-                        }
-                        yield {
-                            "type": "plan_resume_warning",
-                            "pending_tasks": len(pending_execution),
-                        }
-                        if self.plan_review_callback is None:
-                            raise ValueError("恢复未完成的执行节点需要显式确认回调")
-                        retry_decision = await resolve_plan_review(self.plan_review_callback, plan)
-                        if retry_decision.action == PlanReviewAction.CANCEL:
-                            raise TaskCancelledError("计划恢复已取消")
-                        if retry_decision.action == PlanReviewAction.MODIFY:
-                            raise ValueError("执行中的计划不能直接修改；请取消后创建新计划")
-                        self._allow_uncertain_tool_retry = True
-                    graph_input = None
-                else:
-                    graph_input = {
-                        "goal": message,
-                        "planning_goal": message,
-                        "plan": {},
-                        "task_results": Overwrite([]),
-                        "usage_events": Overwrite([]),
-                        "review_required": self.plan_review_callback is not None,
-                        "execution_started": False,
-                        "status": "planning",
-                        "final_text": "",
-                    }
-
-                while True:
-                    interruption: dict[str, Any] | None = None
-                    async for mode, chunk in graph.astream(
-                        graph_input,
-                        graph_config,
-                        stream_mode=["custom", "updates"],
-                    ):
-                        if mode == "custom":
-                            yield chunk
-                            continue
-                        interrupts = chunk.get("__interrupt__") if isinstance(chunk, dict) else None
-                        if interrupts:
-                            interruption = dict(interrupts[0].value)
-                    if interruption is None:
-                        break
-                    yield {"type": "plan_review", "interrupt": interruption}
-                    plan = _plan_from_payload(interruption["plan"])
-                    if self.plan_review_callback is None:
-                        raise ValueError("恢复待确认的计划需要显式确认回调")
-                    decision = await resolve_plan_review(self.plan_review_callback, plan)
-                    graph_input = Command(resume=_decision_payload(decision))
-
-                saved = await graph.aget_state(graph_config)
-                values = dict(saved.values)
-                final_text = str(values.get("final_text") or "")
-                if final_text:
-                    self.history.append(Message(role="assistant", content=final_text))
-                if self._persistent and values.get("status") in {
-                    "cancelled",
-                    "completed",
-                    "failed",
-                }:
-                    plan_id = str(dict(values.get("plan") or {}).get("id") or "")
-                    journal_path = Path(self.config.tools.execution_journal_path).expanduser()
-                    if plan_id and journal_path.exists():
-                        with suppress(Exception):
-                            ToolExecutionJournal(journal_path).delete_scope_prefix(
-                                f"{self.thread_id}:{plan_id}:"
-                            )
-                if values.get("status") == "cancelled":
-                    raise TaskCancelledError(final_text or "计划已取消")
-
-                usage = _sum_usage(values.get("usage_events") or [])
-                turns = sum(
-                    int(result.get("turns") or 0) for result in values.get("task_results") or []
+                graph_input, pending_plan, pending_count = await self._prepare_graph_input(
+                    graph,
+                    graph_config,
+                    message,
                 )
-                done: dict[str, Any] = {
-                    "type": "done",
-                    "total_turns": turns,
-                    "total_tokens": usage.total_tokens,
-                    "usage": usage.to_dict(),
-                    "messages": self.history,
-                    "langgraph": {
-                        "thread_id": self.thread_id,
-                        "status": values.get("status"),
-                    },
-                }
-                yield done
+                if pending_plan is not None:
+                    yield {
+                        "type": "text_delta",
+                        "text": (
+                            "检测到未完成的执行节点。该节点中的工具可能已经产生部分副作用，"
+                            "继续时会重放已完成的工具，并仅重试无法对账的不确定调用；"
+                            "请确认后再恢复。\n\n"
+                        ),
+                    }
+                    yield {
+                        "type": "plan_resume_warning",
+                        "pending_tasks": pending_count,
+                    }
+                    await self._confirm_resume(pending_plan)
+                async for event in self._stream_graph(graph, graph_input, graph_config):
+                    yield event
+                saved = await graph.aget_state(graph_config)
+                yield self._finish_graph(dict(saved.values))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - preserve the shared streaming error contract
             yield {"type": "error", "error": exc}
+
+    async def _prepare_graph_input(
+        self,
+        graph: Any,
+        graph_config: dict[str, Any],
+        message: str,
+    ) -> tuple[dict[str, Any] | Command | None, ExecutionPlan | None, int]:
+        if not self.resume:
+            return self._fresh_graph_input(message), None, 0
+
+        saved = await graph.aget_state(graph_config)
+        if not saved.next:
+            raise ValueError("当前 Session 没有可恢复的 LangGraph Plan")
+
+        pending_execution = [task for task in saved.tasks if task.name == "execute_task"]
+        if not pending_execution:
+            return None, None, 0
+
+        plan = _plan_from_payload(dict(saved.values).get("plan") or {})
+        return None, plan, len(pending_execution)
+
+    async def _confirm_resume(self, plan: ExecutionPlan) -> None:
+        if self.plan_review_callback is None:
+            raise ValueError("恢复未完成的执行节点需要显式确认回调")
+        decision = await resolve_plan_review(self.plan_review_callback, plan)
+        if decision.action == PlanReviewAction.CANCEL:
+            raise TaskCancelledError("计划恢复已取消")
+        if decision.action == PlanReviewAction.MODIFY:
+            raise ValueError("执行中的计划不能直接修改；请取消后创建新计划")
+        self._allow_uncertain_tool_retry = True
+
+    def _fresh_graph_input(self, message: str) -> dict[str, Any]:
+        return {
+            "goal": message,
+            "planning_goal": message,
+            "plan": {},
+            "task_results": Overwrite([]),
+            "usage_events": Overwrite([]),
+            "review_required": self.plan_review_callback is not None,
+            "execution_started": False,
+            "status": "planning",
+            "final_text": "",
+        }
+
+    async def _stream_graph(
+        self,
+        graph: Any,
+        graph_input: dict[str, Any] | Command | None,
+        graph_config: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        while True:
+            interruption: dict[str, Any] | None = None
+            async for mode, chunk in graph.astream(
+                graph_input,
+                graph_config,
+                stream_mode=["custom", "updates"],
+            ):
+                if mode == "custom":
+                    yield chunk
+                    continue
+                interrupts = chunk.get("__interrupt__") if isinstance(chunk, dict) else None
+                if interrupts:
+                    interruption = dict(interrupts[0].value)
+            if interruption is None:
+                return
+
+            yield {"type": "plan_review", "interrupt": interruption}
+            plan = _plan_from_payload(interruption["plan"])
+            if self.plan_review_callback is None:
+                raise ValueError("恢复待确认的计划需要显式确认回调")
+            decision = await resolve_plan_review(self.plan_review_callback, plan)
+            graph_input = Command(resume=_decision_payload(decision))
+
+    def _finish_graph(self, values: dict[str, Any]) -> dict[str, Any]:
+        final_text = str(values.get("final_text") or "")
+        if final_text:
+            self.history.append(Message(role="assistant", content=final_text))
+        self._delete_terminal_journal(values)
+        if values.get("status") == "cancelled":
+            raise TaskCancelledError(final_text or "计划已取消")
+
+        usage = _sum_usage(values.get("usage_events") or [])
+        turns = sum(int(result.get("turns") or 0) for result in values.get("task_results") or [])
+        return {
+            "type": "done",
+            "total_turns": turns,
+            "total_tokens": usage.total_tokens,
+            "usage": usage.to_dict(),
+            "messages": self.history,
+            "langgraph": {
+                "thread_id": self.thread_id,
+                "status": values.get("status"),
+            },
+        }
+
+    def _delete_terminal_journal(self, values: dict[str, Any]) -> None:
+        terminal = values.get("status") in {"cancelled", "completed", "failed"}
+        if not self._persistent or not terminal:
+            return
+        plan_id = str(dict(values.get("plan") or {}).get("id") or "")
+        journal_path = Path(self.config.tools.execution_journal_path).expanduser()
+        if plan_id and journal_path.exists():
+            with suppress(Exception):
+                ToolExecutionJournal(journal_path).delete_scope_prefix(
+                    f"{self.thread_id}:{plan_id}:"
+                )
 
     def _build_graph(self, checkpointer: AsyncSqliteSaver | InMemorySaver):
         builder = StateGraph(PlanGraphState)

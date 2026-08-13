@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,21 +19,17 @@ from rich.table import Table
 from vela import __version__
 from vela.agent import Agent, LangGraphPlanAgent
 from vela.bootstrap import build_tool_registry
-from vela.branding import CLI_NAME, PRODUCT_NAME
-from vela.config import VelaConfig, config_to_public_dict
-from vela.entrypoints.model_command import handle_model_command
+from vela.branding import PRODUCT_NAME
+from vela.config import VelaConfig
+from vela.entrypoints.repl_commands import handle_context_command, handle_settings_command
 from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
     BorderedPromptSession,
-    PermissionMode,
     PermissionModeController,
     permission_key_bindings,
-    permission_mode_label,
     prompt_message,
 )
 from vela.llm import create_llm_client
-from vela.memory import MemoryManager
-from vela.policy import AuditLog
 from vela.render import RichRenderer
 from vela.session import ActiveSession, finalize_interrupted_history
 from vela.skill import SkillRegistry
@@ -336,7 +331,7 @@ async def _handle_slash(raw: str, runtime: ReplRuntime) -> bool:
     elif command in {"/sessions", "/resume"}:
         _handle_session_command(command, arg, runtime)
     elif command in {"/context", "/memory", "/save"}:
-        await _handle_context_command(command, arg, runtime)
+        handle_context_command(command, arg, runtime)
     elif command == "/plan":
         _handle_plan_command(arg, runtime)
     elif command in {
@@ -350,7 +345,7 @@ async def _handle_slash(raw: str, runtime: ReplRuntime) -> bool:
         "/skill",
         "/mcp",
     }:
-        await _handle_settings_command(command, arg, runtime)
+        await handle_settings_command(command, arg, runtime)
     else:
         runtime.console.print(f"[red]Unknown command:[/red] {command}")
     return False
@@ -381,34 +376,6 @@ def _handle_session_command(command: str, arg: str, runtime: ReplRuntime) -> Non
         _resume_command(arg, runtime.console, runtime.agent, runtime.active_session)
 
 
-async def _handle_context_command(command: str, arg: str, runtime: ReplRuntime) -> None:
-    config = runtime.config
-    if command == "/context":
-        memories = MemoryManager(config.memory.long_term_db_path, scope=runtime.cwd).list(limit=5)
-        table = Table(title=f"{PRODUCT_NAME} Context")
-        table.add_column("Field")
-        table.add_column("Value")
-        table.add_row("cwd", runtime.cwd)
-        table.add_row("model", f"{config.llm.model} ({config.llm.provider})")
-        table.add_row("context window", str(runtime.agent.llm_client.max_context_window))
-        table.add_row("memory", f"{len(memories)} recent entries")
-        table.add_row("tools", str(len(runtime.registry.list_names())))
-        runtime.console.print(table)
-    elif command == "/memory":
-        await _memory_command(arg, runtime.console, runtime.cwd, config)
-    else:
-        if not arg:
-            runtime.console.print("[red]Usage:[/red] /save <fact>")
-        else:
-            memory_id = MemoryManager(
-                config.memory.long_term_db_path,
-                scope=runtime.cwd,
-                max_entries=config.memory.max_long_term_entries,
-                max_content_length=config.memory.max_memory_chars,
-            ).save(arg, source="manual", importance=0.8)
-            runtime.console.print(f"Saved memory #{memory_id}")
-
-
 def _handle_plan_command(arg: str, runtime: ReplRuntime) -> None:
     if not arg:
         runtime.console.print("[red]Usage:[/red] /plan <task>")
@@ -437,40 +404,6 @@ def _start_plan(arg: str, runtime: ReplRuntime) -> None:
         runtime.task_controller,
     )
     runtime.task_controller.start(run, initial_state=TaskState.PLANNING, label=arg)
-
-
-async def _handle_settings_command(command: str, arg: str, runtime: ReplRuntime) -> None:
-    config = runtime.config
-    if command == "/config":
-        runtime.console.print_json(json.dumps(config_to_public_dict(config), ensure_ascii=False))
-    elif command == "/tools":
-        runtime.console.print("\n".join(runtime.registry.list_names()))
-    elif command == "/hitl":
-        _hitl_command(arg, runtime.console, runtime.permission_mode)
-    elif command == "/policy":
-        runtime.console.print_json(
-            json.dumps(config_to_public_dict(config)["policy"], ensure_ascii=False)
-        )
-    elif command == "/audit":
-        limit = int(arg or "20") if (arg or "20").isdigit() else 20
-        runtime.console.print_json(
-            json.dumps(AuditLog(config.policy.audit_log_path).tail(limit), ensure_ascii=False)
-        )
-    elif command == "/model":
-        await handle_model_command(
-            arg,
-            runtime.console,
-            runtime.agent,
-            runtime.renderer,
-        )
-    elif command == "/usage":
-        runtime.console.print_json(
-            json.dumps(runtime.agent.last_usage.to_dict(), ensure_ascii=False)
-        )
-    elif command == "/skill":
-        _skill_command(arg, runtime.console, runtime.cwd)
-    else:
-        runtime.console.print(f"Use `{CLI_NAME} mcp list` to inspect configured MCP servers.")
 
 
 # Slash command helpers -------------------------------------------------------
@@ -564,65 +497,6 @@ async def _run_delegated_with_session(
     finally:
         active_session.save(agent.history, title=message)
         _print_session_warning(console, active_session)
-
-
-async def _memory_command(arg: str, console: Console, cwd: str, config: VelaConfig) -> None:
-    manager = MemoryManager(
-        config.memory.long_term_db_path,
-        scope=cwd,
-        max_entries=config.memory.max_long_term_entries,
-        max_content_length=config.memory.max_memory_chars,
-    )
-    sub, _, rest = arg.partition(" ")
-    if sub == "clear":
-        count = manager.clear()
-        console.print(f"Cleared {count} memories.")
-    elif sub == "search":
-        rows = manager.recall(rest, mark_access=False)
-        console.print("\n".join(f"#{row.id} {row.content}" for row in rows) or "(no matches)")
-    elif sub == "stats":
-        console.print_json(json.dumps(manager.stats(), ensure_ascii=False))
-    elif sub == "delete" and rest.strip().isdigit():
-        console.print(f"Deleted: {manager.delete(int(rest.strip()))}")
-    else:
-        rows = manager.list()
-        console.print("\n".join(f"#{row.id} {row.content}" for row in rows) or "(no memories)")
-
-
-def _hitl_command(
-    arg: str,
-    console: Console,
-    permission_mode: PermissionModeController,
-) -> None:
-    aliases: dict[str, PermissionMode] = {
-        "default": "default",
-        "on": "default",
-        "auto": "auto",
-        "off": "auto",
-    }
-    if arg in aliases:
-        permission_mode.set(aliases[arg])
-    elif arg:
-        console.print("[red]Usage:[/red] /hitl default|auto")
-        return
-    console.print(f"Permission mode: {permission_mode_label(permission_mode.mode)}")
-
-
-def _skill_command(arg: str, console: Console, cwd: str) -> None:
-    registry = SkillRegistry(cwd)
-    sub, _, rest = arg.partition(" ")
-    if sub == "show" and rest:
-        skill = registry.load(rest.strip())
-        if not skill:
-            console.print(f'Skill "{rest.strip()}" not found.')
-            return
-        console.print(skill.content[:12_000])
-        return
-    if sub and sub != "list":
-        console.print("[red]Usage:[/red] /skill [list|show <name>]")
-        return
-    lines = [f"{item.name}\t{item.source}\t{item.description}" for item in registry.list()]
-    console.print("\n".join(lines) or "(no skills)")
 
 
 # Approval and small parsing helpers ------------------------------------------
