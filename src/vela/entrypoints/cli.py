@@ -41,7 +41,7 @@ from vela.config import get_config_paths, load_config
 from vela.entrypoints.repl import start_repl
 from vela.entrypoints.trace_command import show_run_traces
 from vela.llm import create_llm_client
-from vela.mcp import load_mcp_server_specs, write_chrome_devtools_config
+from vela.mcp import load_mcp_server_specs, write_chrome_devtools_config, write_code_rag_config
 from vela.run_trace import RunTraceStore
 
 app = typer.Typer(
@@ -253,6 +253,17 @@ def mcp_list(
     for spec in specs.values():
         target = spec.url or f"{spec.command} {' '.join(spec.args)}".strip()
         typer.echo(f"{spec.name}\t{spec.type}\t{target}")
+
+
+@mcp_app.command("init-rag")
+def mcp_init_rag(
+    cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
+) -> None:
+    """Register the local Code RAG MCP server for this project."""
+    root = (cwd or Path.cwd()).resolve()
+    path = write_code_rag_config(scope_root=root)
+    typer.echo(f"Wrote Code RAG MCP config to {path}")
+    typer.echo("Run Vela and ask it to call index_repository before the first search.")
 
 
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 vela = "vela.entrypoints.cli:app"
+vela-rag = "vela_rag.server:main"
 
 [project.optional-dependencies]
 dev = [
@@ -38,7 +39,7 @@ build-backend = "hatchling.build"
 package = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/vela"]
+packages = ["src/vela", "src/vela_rag"]
 
 [tool.hatch.build.targets.sdist]
 include = [
