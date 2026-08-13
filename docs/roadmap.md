@@ -1,11 +1,11 @@
 # Vela Roadmap
 
-Vela 的目标是成为一个专注本地代码仓库工作的终端 AI Agent：普通任务使用 LangChain
-ReAct，复杂任务使用可恢复的 LangGraph Plan DAG，并通过 MCP 扩展外部能力。
+Vela 的目标是成为一个专注本地代码仓库工作的终端 AI Agent：普通任务使用显式、可读的
+Vela ReAct 循环，复杂任务使用可恢复的 LangGraph Plan DAG，并通过 MCP 扩展外部能力。
 
 ## 当前基础
 
-- LangChain ReAct 与 LangGraph Plan-and-Execute 共用模型、工具、安全策略和事件协议。
+- Vela ReAct 与 LangGraph Plan-and-Execute 共用模型、工具、安全策略和事件协议。
 - 项目级 Session、任务取消、Checkpoint、工具执行日志和中断恢复。
 - 文件、Shell、代码搜索、Memory、只读 Skills、图片输入和 MCP 工具。
 - HITL 确认、路径与命令策略、JSONL 审计日志。
@@ -16,13 +16,14 @@ ReAct，复杂任务使用可恢复的 LangGraph Plan DAG，并通过 MCP 扩展
 - [x] 使用 TypedDict 统一 Agent 与 LLM 流式事件协议。
 - [x] 建立 GitHub Actions 质量门禁和发行包构建。
 - [x] 提供可选的真实模型、stdio MCP、浏览器和 Plan Live 验收入口。
+- [x] 为 ReAct/Plan 统一 Run ID、终态、总耗时、Token 与工具摘要，并提供 JSONL 查询入口。
 - [ ] 自动化交互式取消与中断 Plan 恢复的 PTY Live 验收。
 - [ ] 增加 MCP Server 状态、重启、日志和运行时启停命令。
 - [ ] 支持在普通输入中直接引用 MCP Resource 和 Prompt。
 
-## 下一阶段：可观测和浏览器体验
+## 下一阶段：执行细节和浏览器体验
 
-- 统一 Run ID、节点耗时、Token、模型调用和工具调用摘要。
+- 用同一 Run ID 关联工具 Audit，并增加模型调用、工具调用和 LangGraph 节点级耗时。
 - 为 ReAct 与 Plan 建立可重复执行的任务评测集和结果对比。
 - 增加浏览器连接状态、标签页、断开和登录态复用操作。
 - 支持用户级、项目级 Prompt 模板覆盖。

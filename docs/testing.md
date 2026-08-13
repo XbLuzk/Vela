@@ -18,7 +18,8 @@ uv build
 ## 2. 确定性集成测试
 
 普通 pytest 已覆盖真实 SQLite、LangGraph Checkpoint、stdio MCP 子进程、工具取消、执行日志、
-Plan 恢复和 Session 持久化。模型响应使用受控测试实现，保证错误和恢复场景可以稳定复现。
+Plan 恢复、Session 持久化和 Run Trace 收尾。Run Trace 会验证完成、错误、取消、提前停止消费、
+损坏 JSONL 行与敏感异常脱敏；模型响应使用受控测试实现，保证错误和恢复场景可以稳定复现。
 
 ## 3. Live E2E
 

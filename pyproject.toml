@@ -1,7 +1,7 @@
 [project]
 name = "vela-agent"
 version = "0.3.0"
-description = "Vela terminal AI agent with LangChain ReAct, LangGraph planning, MCP, memory, and multimodal input"
+description = "Vela terminal AI agent with an explicit ReAct loop, LangGraph planning, MCP, memory, and multimodal input"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -9,8 +9,8 @@ authors = [{ name = "Vela Contributors" }]
 keywords = ["agent", "ai", "cli", "llm", "mcp", "react", "terminal"]
 dependencies = [
   "aiosqlite>=0.22,<1",
+  "filelock>=3.16,<4",
   "httpx>=0.27.0",
-  "langchain>=1.3,<2",
   "langgraph>=1.2,<2",
   "langgraph-checkpoint-sqlite>=3.1,<4",
   "mcp>=1.27,<2",

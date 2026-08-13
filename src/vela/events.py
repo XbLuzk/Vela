@@ -23,6 +23,8 @@ AgentEventType = Literal[
     "plan_status",
     "plan_task_done",
     "plan_task_started",
+    "run_finished",
+    "run_started",
     "text_delta",
     "thinking_delta",
     "tool_call",
@@ -32,6 +34,28 @@ AgentEventType = Literal[
 ]
 
 AgentPhase = Literal["planning", "execution"]
+RunStatus = Literal["planning", "running", "cancelled", "completed", "failed"]
+
+
+class RunTracePayload(TypedDict):
+    """Serializable summary of one Agent request."""
+
+    run_id: str
+    status: RunStatus
+    mode: str
+    model: str
+    provider: str
+    cwd: str
+    session_id: str | None
+    started_at: str
+    finished_at: str | None
+    duration_ms: int
+    turns: int
+    usage: UsagePayload
+    tool_calls: int
+    tool_errors: int
+    replayed_tools: int
+    error: str | None
 
 
 class _AgentEventBase(TypedDict):
@@ -75,6 +99,18 @@ class AgentEvent(_AgentEventBase, total=False):
     turns: int
     tokens: int
     plan: PlanEventValue
+    run_id: str
+    status: RunStatus
+    mode: str
+    model: str
+    provider: str
+    cwd: str
+    session_id: str | None
+    started_at: str
+    finished_at: str | None
+    duration_ms: int
+    trace: RunTracePayload
+    warning: str
 
 
 LlmEventType = Literal[

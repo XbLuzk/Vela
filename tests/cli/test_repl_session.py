@@ -17,8 +17,10 @@ from vela.entrypoints.repl import (
     _repl_loop,
     _run_agent_with_session,
     _run_delegated_with_session,
+    _run_events,
 )
 from vela.render.rich_renderer import RichRenderer
+from vela.run_trace import RunTrace, RunTracker
 from vela.session import ActiveSession, SessionStore
 from vela.task_control import InteractiveTaskController, TaskState
 from vela.tools import ToolRegistry
@@ -120,6 +122,66 @@ def test_agent_retains_user_message_when_cancelled(tmp_path, monkeypatch):
 
     assert agent.history[-1].role == "user"
     assert "keep cancelled request" in str(agent.history[-1].content)
+
+
+def test_repl_consumes_run_finished_before_raising_agent_error(tmp_path) -> None:
+    stream = StringIO()
+    renderer = RichRenderer(Console(file=stream, color_system=None, width=160))
+    tracker = RunTracker(
+        mode="react",
+        model="fake-model",
+        provider="fake-provider",
+        cwd=str(tmp_path),
+    )
+
+    async def failed_events():
+        yield {"type": "error", "error": RuntimeError("provider failed")}
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        asyncio.run(_run_events(tracker.stream(failed_events()), renderer))
+
+    output = stream.getvalue()
+    assert "failed" in output
+    assert tracker.trace.run_id.removeprefix("run_") in output
+
+
+def test_repl_renders_cancelled_trace_before_propagating_cancel(tmp_path, monkeypatch) -> None:
+    store = SessionStore(tmp_path / "sessions.db")
+    active = ActiveSession.open(tmp_path / "project", store=store)
+    agent = _FakeAgent()
+    agent.last_run_trace = RunTrace(
+        run_id="run_cancelled123",
+        status="cancelled",
+        mode="react",
+        model="fake-model",
+        provider="fake-provider",
+        cwd=str(tmp_path),
+        session_id=active.current.id,
+        started_at="2026-08-14T00:00:00+00:00",
+        finished_at="2026-08-14T00:00:01+00:00",
+        duration_ms=1_000,
+    )
+    stream = StringIO()
+    console = Console(file=stream, color_system=None, width=160)
+
+    async def cancel_run(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(repl, "_run_agent", cancel_run)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            _run_agent_with_session(
+                agent,
+                RichRenderer(console),
+                "cancel me",
+                active,
+                console,
+            )
+        )
+
+    assert "cancelled123" in stream.getvalue()
+    assert "cancelled" in stream.getvalue()
 
 
 def test_agent_plan_mode_preserves_prior_history(tmp_path, monkeypatch):

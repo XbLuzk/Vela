@@ -54,6 +54,7 @@ class RichRenderer:
         self._last_total_tokens = 0
         self._last_context_ratio = 0.0
         self._last_has_usage = False
+        self._current_run_id = ""
 
     def set_context_window(self, context_window: int | None) -> None:
         self._context_window = context_window or self._context_window
@@ -67,6 +68,7 @@ class RichRenderer:
         self._input_tokens = 0
         self._output_tokens = 0
         self._last_input_tokens = 0
+        self._current_run_id = ""
 
     def toolbar_status(self) -> dict[str, Any]:
         return {
@@ -99,7 +101,9 @@ class RichRenderer:
 
     def handle(self, event: AgentEvent) -> None:
         event_type = event.get("type")
-        if event_type == "text_delta":
+        if event_type == "run_started":
+            self._current_run_id = str(event.get("run_id") or "")
+        elif event_type == "text_delta":
             self._flush_thinking()
             text = str(event.get("text") or "")
             self._buffer.append(text)
@@ -157,6 +161,8 @@ class RichRenderer:
             self._flush_thinking()
             self._flush_markdown(title="Final Output")
             self._record_run_summary(event)
+        elif event_type == "run_finished":
+            self._print_run_finished(event)
 
     def newline(self) -> None:
         self._flush_thinking()
@@ -314,6 +320,25 @@ class RichRenderer:
         self._last_total_tokens = total_tokens
         self._last_context_ratio = context_ratio
         self._last_has_usage = has_usage
+
+    def _print_run_finished(self, event: AgentEvent) -> None:
+        trace = event.get("trace") or {}
+        run_id = str(trace.get("run_id") or self._current_run_id)
+        short_id = run_id.removeprefix("run_")
+        status = str(trace.get("status") or "completed")
+        duration_ms = int(trace.get("duration_ms") or 0)
+        turns = int(trace.get("turns") or 0)
+        usage = trace.get("usage") or {}
+        tokens = int(usage.get("total_tokens") or 0)
+        tools = int(trace.get("tool_calls") or 0)
+        summary = (
+            f"Run {short_id} · {status} · {duration_ms / 1_000:.2f}s · "
+            f"{turns} turns · {tokens} tokens · {tools} tools"
+        )
+        self.console.print(Text(summary, style="dim"))
+        warning = str(event.get("warning") or "")
+        if warning:
+            self.console.print(Text(warning, style="yellow"))
 
     def _identity_panel(self, *, version: str, api_key_configured: bool) -> Table:
         logo = Text("\n".join(_VELA_MARK), style=RICH_STYLE_RULES["logo"])

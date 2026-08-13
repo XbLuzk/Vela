@@ -11,8 +11,10 @@ from vela.branding import CLI_NAME, PRODUCT_NAME
 from vela.config import config_to_public_dict
 from vela.entrypoints.model_command import handle_model_command
 from vela.entrypoints.repl_ui import PermissionMode, permission_mode_label
+from vela.entrypoints.trace_command import parse_trace_args, show_run_traces
 from vela.memory import MemoryManager
 from vela.policy import AuditLog
+from vela.run_trace import RunTraceStore
 from vela.skill import SkillRegistry
 
 if TYPE_CHECKING:
@@ -65,6 +67,15 @@ async def handle_settings_command(command: str, arg: str, runtime: ReplRuntime) 
     elif command == "/usage":
         runtime.console.print_json(
             json.dumps(runtime.agent.last_usage.to_dict(), ensure_ascii=False)
+        )
+    elif command == "/trace":
+        reference, json_output = parse_trace_args(arg)
+        store = getattr(runtime.agent, "trace_store", None) or RunTraceStore()
+        show_run_traces(
+            runtime.console,
+            store,
+            reference=reference,
+            json_output=json_output,
         )
     elif command == "/skill":
         _handle_skill(arg, runtime)

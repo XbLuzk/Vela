@@ -33,6 +33,7 @@ from vela.entrypoints.repl_ui import (
 from vela.events import AgentEvent
 from vela.llm import create_llm_client
 from vela.render import RichRenderer
+from vela.run_trace import RunTraceStore, trace_finished_event
 from vela.session import ActiveSession, finalize_interrupted_history
 from vela.skill import SkillRegistry
 from vela.task_control import InteractiveTaskController, TaskState
@@ -57,6 +58,7 @@ SLASH_COMMANDS = [
     "/plan",
     "/model",
     "/usage",
+    "/trace",
     "/skill",
     "/mcp",
 ]
@@ -77,6 +79,10 @@ Sessions
   /sessions             List sessions for the current project
   /resume [id|number]   Resume a previous session
   /plan --resume        Resume that session's interrupted LangGraph plan
+
+Runs
+  /trace                List recent Agent runs
+  /trace <id|number>    Inspect one persisted run summary
 
 Other commands
   {commands}
@@ -130,6 +136,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
             permission_mode,
             task_controller,
         ),
+        trace_store=RunTraceStore(),
     )
     active_session = ActiveSession.open(cwd, resume=resume)
     agent.graph_thread_id = active_session.current.id
@@ -291,6 +298,15 @@ async def _run_agent_with_session(
             await _run_agent(agent, renderer, message, task_controller)
     except asyncio.CancelledError:
         agent.history = finalize_interrupted_history(agent.history, status="cancelled")
+        trace = getattr(agent, "last_run_trace", None)
+        if renderer is not None and trace is not None:
+            renderer.handle(
+                trace_finished_event(
+                    trace,
+                    warning=getattr(agent, "last_run_trace_warning", None),
+                )
+            )
+            renderer.newline()
         raise
     except BaseException as exc:
         agent.history = finalize_interrupted_history(
@@ -313,13 +329,19 @@ async def _run_events(
     renderer.set_context_window(context_window)
     renderer.start_run()
     renderer.newline()
+    pending_error: BaseException | None = None
     async for event in events:
-        renderer.handle(event)
+        event_type = event.get("type")
+        if pending_error is None or event_type == "run_finished":
+            renderer.handle(event)
         if task_controller is not None and event.get("type") == "plan_status":
             task_controller.set_phase(str(event.get("phase") or ""))
-        if event.get("type") == "error":
-            raise event["error"]
+        if event_type == "error" and pending_error is None:
+            error = event.get("error")
+            pending_error = error if isinstance(error, BaseException) else RuntimeError(str(error))
     renderer.newline()
+    if pending_error is not None:
+        raise pending_error
 
 
 async def _handle_slash(raw: str, runtime: ReplRuntime) -> bool:
@@ -344,6 +366,7 @@ async def _handle_slash(raw: str, runtime: ReplRuntime) -> bool:
         "/audit",
         "/model",
         "/usage",
+        "/trace",
         "/skill",
         "/mcp",
     }:
@@ -473,10 +496,15 @@ async def _run_delegated_with_session(
 ) -> None:
     previous_history = list(agent.history)
     agent.history = [*previous_history, Message(role="user", content=message)]
+    events: AsyncIterable[AgentEvent] = delegated_agent.run(message)
+    track_events = getattr(agent, "track_events", None)
+    if callable(track_events):
+        events = track_events(events, mode="plan")
+    run_renderer = RichRenderer()
     try:
         await _run_events(
-            delegated_agent.run(message),
-            RichRenderer(),
+            events,
+            run_renderer,
             agent.llm_client.max_context_window,
             task_controller,
         )
@@ -486,6 +514,14 @@ async def _run_delegated_with_session(
         if delegated_agent.history:
             agent.history = [*previous_history, *delegated_agent.history]
         agent.history = finalize_interrupted_history(agent.history, status="cancelled")
+        if getattr(agent, "last_run_trace", None) is not None:
+            run_renderer.handle(
+                trace_finished_event(
+                    agent.last_run_trace,
+                    warning=getattr(agent, "last_run_trace_warning", None),
+                )
+            )
+            run_renderer.newline()
         raise
     except BaseException as exc:
         if delegated_agent.history:

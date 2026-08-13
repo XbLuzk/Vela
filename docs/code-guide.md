@@ -5,24 +5,28 @@
 
 ## 1. 先看最短主链路
 
-一次普通请求只需要跟下面五步：
+一次普通请求只需要跟下面六步：
 
 1. `src/vela/entrypoints/cli.py::main`：解析命令行参数，选择交互模式或单次任务。
 2. `src/vela/entrypoints/repl.py::start_repl`：组装模型、工具、Agent 和 Session。
 3. `src/vela/entrypoints/repl.py::_repl_loop`：读取用户输入并启动当前任务。
 4. `src/vela/agent/agent.py::Agent.run`：根据 `react / plan` 选择执行方式。
-5. `src/vela/agent/langchain_runtime.py::run_langchain_agent`：启动 LangChain Agent Graph，执行“模型回复 → 工具调用 → 工具结果 → 再次回复”。
+5. `src/vela/run_trace.py::RunTracker.stream`：为请求增加 Run ID，并统一收尾完成、失败和取消。
+6. `src/vela/agent/react_runtime.py::run_react_agent`：执行“模型回复 → 工具调用 → 工具结果 → 再次回复”。
 
-先忽略界面样式、MCP、Memory 和恢复逻辑。能解释这五步，就已经理解了项目最核心的运行链路。
+先忽略界面样式、MCP、Memory 和恢复逻辑。能解释这六步，就已经理解了项目最核心的运行链路。
 
 ## 2. ReAct 循环怎么读
 
-`run_langchain_agent()` 可以按四段理解：
+`run_react_agent()` 的主循环直接写在一个函数里，可以按五段理解：
 
 1. 把历史消息、本次请求、Skill 和系统提示词组装成模型输入。
-2. `create_agent()` 管理模型与工具之间的标准 ReAct 循环。
-3. `VelaChatModel` 保留模型流式协议，`VelaToolMiddleware` 继续调用 `ToolExecutor`。
-4. LangChain 回填工具结果，Vela 同步 Session 历史并输出终端事件。
+2. `_stream_model_turn()` 直接读取 Vela 的 `LlmEvent`，拼出一次完整的模型回复。
+3. 没有工具调用就结束；有工具调用就进入 `_execute_tool_round()`。
+4. `ToolExecutor` 负责并发只读工具、串行写工具、HITL 和工具 Journal。
+5. 工具结果写回消息历史，下一轮模型调用继续处理。
+
+这条普通 ReAct 链路不依赖高层 Agent 框架，因此可以直接看到循环条件、消息变化和异常出口。
 
 `src/vela/events.py` 用 `AgentEvent` 和 `LlmEvent` 两个 TypedDict 集中声明事件名称和字段；
 阅读事件流时先看 `type`，再查看该事件使用的可选字段。
@@ -40,7 +44,7 @@
   - Planner 生成 DAG。
   - `run()` 只串联“准备输入 → 流式执行 → 收尾”三步，恢复确认和 Journal 清理分别由小函数负责。
   - LangGraph 保存状态、等待人工确认并并行派发可执行节点。
-  - 每个节点仍然复用 `run_langchain_agent()`，不是另一套工具系统。
+  - 每个节点仍然复用 `run_react_agent()`，不是另一套模型或工具系统。
 
 工具执行入口是 `src/vela/tools/executor.py::ToolExecutor._execute_single`。按顺序读它调用的
 `_prepare_mutation()`、`_claim_mutation()` 和 `_run_tool()`，就能区分恢复、占位和真正执行三个阶段。
@@ -50,6 +54,7 @@
 - `src/vela/session.py`：保存和恢复对话消息。
 - `src/vela/tools/journal.py`：记录有副作用的工具调用，恢复时避免重复执行已完成操作。
 - `src/vela/task_control.py`：管理 planning、running、cancelled 等前台任务状态。
+- `src/vela/run_trace.py`：聚合一次请求的终态、耗时、Token 和工具摘要，并追加写入 JSONL。
 - `src/vela/entrypoints/repl_commands.py`：实现配置、上下文、Memory、Skill 等斜杠命令。
 - `src/vela/entrypoints/repl_ui.py`：输入框、快捷键和底部状态栏；它不参与 Agent 决策。
 - `src/vela/render/rich_renderer.py`：把 Agent 事件显示到终端。

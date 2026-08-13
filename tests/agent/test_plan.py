@@ -78,6 +78,87 @@ def test_planner_uses_model_for_simple_goal():
     assert events[-1]["plan"].summary == "review"
 
 
+def test_plan_agent_rejects_non_positive_task_turn_limit(tmp_path):
+    config = load_config(project_root=tmp_path)
+
+    with pytest.raises(ValueError, match="max_task_turns must be at least 1"):
+        LangGraphPlanAgent(
+            llm_client=FakeClient(),
+            tool_registry=ToolRegistry(),
+            config=config,
+            cwd=str(tmp_path),
+            max_task_turns=0,
+        )
+
+
+def test_closing_plan_run_closes_langgraph_stream(tmp_path, monkeypatch):
+    class BlockingGraph:
+        def __init__(self):
+            self.closed = False
+
+        async def astream(self, graph_input, graph_config, *, stream_mode):  # noqa: ARG002
+            try:
+                yield "custom", {"type": "text_delta", "text": "partial"}
+                await asyncio.Event().wait()
+            finally:
+                self.closed = True
+
+    config = load_config(project_root=tmp_path)
+    graph = BlockingGraph()
+    agent = LangGraphPlanAgent(
+        llm_client=FakeClient(),
+        tool_registry=ToolRegistry(),
+        config=config,
+        cwd=str(tmp_path),
+    )
+    monkeypatch.setattr(agent, "_build_graph", lambda _checkpointer: graph)
+
+    async def close_after_first_event():
+        stream = agent.run("plan something")
+        assert (await anext(stream))["type"] == "text_delta"
+        await stream.aclose()
+        assert graph.closed
+
+    asyncio.run(close_after_first_event())
+
+
+def test_plan_cleanup_failure_does_not_replace_task_cancellation(tmp_path, monkeypatch):
+    class FailingCleanupGraph:
+        def __init__(self):
+            self.started = asyncio.Event()
+
+        async def astream(self, graph_input, graph_config, *, stream_mode):  # noqa: ARG002
+            try:
+                self.started.set()
+                yield "custom", {"type": "text_delta", "text": "partial"}
+                await asyncio.Event().wait()
+            finally:
+                raise RuntimeError("plan cleanup failed")
+
+    config = load_config(project_root=tmp_path)
+    graph = FailingCleanupGraph()
+    agent = LangGraphPlanAgent(
+        llm_client=FakeClient(),
+        tool_registry=ToolRegistry(),
+        config=config,
+        cwd=str(tmp_path),
+    )
+    monkeypatch.setattr(agent, "_build_graph", lambda _checkpointer: graph)
+
+    async def cancel_during_graph_stream():
+        async def consume():
+            return [event async for event in agent.run("plan something")]
+
+        task = asyncio.create_task(consume())
+        await graph.started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError) as error:
+            await task
+        assert isinstance(error.value.__cause__, RuntimeError)
+
+    asyncio.run(cancel_during_graph_stream())
+
+
 def test_plan_execute_runs_independent_tasks_in_parallel(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     client = ParallelPlanClient()

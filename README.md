@@ -10,12 +10,11 @@
   <a href="https://github.com/XbLuzk/Vela/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/XbLuzk/Vela/ci.yml?branch=main&amp;style=flat-square&amp;label=CI"></a>
   <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/XbLuzk/Vela?style=flat-square"></a>
   <a href="https://docs.langchain.com/oss/python/langgraph/overview"><img alt="LangGraph 1.2+" src="https://img.shields.io/badge/LangGraph-1.2%2B-1C3C3C?style=flat-square"></a>
-  <a href="https://docs.langchain.com/oss/python/langchain/overview"><img alt="LangChain 1.3+" src="https://img.shields.io/badge/LangChain-1.3%2B-1C3C3C?style=flat-square"></a>
   <a href="https://modelcontextprotocol.io/docs/getting-started/intro"><img alt="MCP compatible" src="https://img.shields.io/badge/MCP-compatible-7C3AED?style=flat-square"></a>
 </p>
 
 <p align="center">
-  LangChain ReAct · LangGraph Plan · MCP · Skills · Memory · Multimodal
+  Vela ReAct · LangGraph Plan · MCP · Skills · Memory · Multimodal
 </p>
 
 <p align="center">
@@ -29,20 +28,22 @@ Vela 是一个运行在终端中的 AI Agent。它能够读取和修改文件、
 MCP 工具、管理长期记忆，并通过可恢复的 Session、LangGraph Checkpoint 和工具执行日志处理
 长任务与中断恢复。
 
-普通任务由 LangChain Agent Graph 驱动 ReAct 循环；复杂任务由 LangGraph 编排 Plan DAG。
-两种模式共用 Vela 的模型适配、工具安全策略、执行日志、Session 和终端事件协议。
+普通任务由 Vela 自己的显式 ReAct 循环驱动；复杂任务由 LangGraph 编排 Plan DAG。两种模式
+共用 Vela 的模型客户端、工具安全策略、执行日志、Session 和终端事件协议，LangGraph 不接管
+普通对话的模型与工具循环。
 
 第一次阅读 Python Agent 项目，可以从 [Vela 代码阅读路线](docs/code-guide.md) 开始，只跟普通
-ReAct 请求的五步主链路，再逐步进入 Plan、Session 和终端 UI。
+ReAct 请求的六步主链路，再逐步进入 Plan、Session 和终端 UI。
 
 ## 核心能力
 
 | 能力 | 说明 |
 | --- | --- |
-| Agent 运行时 | LangChain ReAct 与可恢复的 LangGraph Plan-and-Execute |
+| Agent 运行时 | 显式 Vela ReAct 循环与可恢复的 LangGraph Plan-and-Execute |
 | 任务恢复 | 项目级持久化 Session、任务取消、Graph Checkpoint 和工具结果重放 |
 | 工具系统 | 文件、Shell、代码搜索、记忆、Skill 和 MCP 扩展工具 |
 | 安全控制 | HITL 人工确认、路径与命令策略、JSONL 审计日志和会话级权限切换 |
+| 运行追踪 | 每次 ReAct/Plan 请求都有 Run ID、终态、耗时、Token 与工具摘要 |
 | 上下文管理 | 静态项目指令、SQLite 长期记忆、相关性召回、Token 预算和上下文压缩 |
 | 多模态输入 | 支持本地图片、远程图片、`@image` 引用和 macOS 剪贴板图片 |
 | 使用方式 | 交互式 CLI 和单次 Prompt |
@@ -88,6 +89,13 @@ uv run vela doctor --cwd .
 ```bash
 uv run vela -p "帮我总结这个项目"
 uv run vela --mode plan -p "先读取 README，再验证项目" --json
+```
+
+`--json` 结果包含本次 `run_id`。查看最近运行或检查单次执行摘要：
+
+```bash
+uv run vela trace
+uv run vela trace <run-id> --json
 ```
 
 ## 配置
@@ -147,6 +155,20 @@ uv run vela -p "解释这个仓库"
 Shell 工具。第一次 `Ctrl+C` 取消当前任务，再按一次才退出 Vela。取消或失败的对话仍会保存，
 之后可以通过 `/resume` 继续。
 
+### Run Trace
+
+每次 ReAct 或 Plan 请求都会生成稳定的 `run_<id>`，并在完成、失败或取消时写入
+`~/.vela/runs.jsonl`。Trace 记录终态、模型、模式、耗时、Token、工具调用/错误/重放计数和关联
+Session，不保存用户 Prompt、工具入参或工具结果。
+
+```text
+/trace
+/trace <run-id-or-index>
+/trace --json
+```
+
+运行结束后终端会显示简短摘要；需要排查问题时再用 `/trace` 或 `vela trace` 查看完整 JSON。
+
 ### Plan-and-Execute
 
 `/plan` 使用 LangGraph 生成并执行任务 DAG。计划生成后需要人工选择：
@@ -200,6 +222,8 @@ Shell 工具。第一次 `Ctrl+C` 取消当前任务，再按一次才退出 Vel
 /model [model-id]
 /model <provider> <model-id>
 /usage
+/trace [run-id-or-index]
+/trace --json
 /skill
 /skill list
 /skill show <name>

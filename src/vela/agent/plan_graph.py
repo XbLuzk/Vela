@@ -17,7 +17,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Overwrite, Send, interrupt
 
-from vela.agent.langchain_runtime import run_langchain_agent
+from vela.agent.react_runtime import run_react_agent
 from vela.config import VelaConfig
 from vela.events import AgentEvent
 from vela.llm.base import LlmClient
@@ -78,6 +78,8 @@ class LangGraphPlanAgent:
         checkpoint_path: str | Path | None = None,
         resume: bool = False,
     ) -> None:
+        if max_task_turns < 1:
+            raise ValueError("max_task_turns must be at least 1.")
         self.llm_client = llm_client
         self.tool_registry = tool_registry
         self.config = config
@@ -125,13 +127,20 @@ class LangGraphPlanAgent:
                         "pending_tasks": pending_count,
                     }
                     await self._confirm_resume(pending_plan)
-                async for event in self._stream_graph(graph, graph_input, graph_config):
-                    yield event
+                stream = self._stream_graph(graph, graph_input, graph_config)
+                try:
+                    async for event in stream:
+                        yield event
+                finally:
+                    await stream.aclose()
                 saved = await graph.aget_state(graph_config)
                 yield self._finish_graph(dict(saved.values))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - preserve the shared streaming error contract
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise asyncio.CancelledError from exc
             yield {"type": "error", "error": exc}
 
     async def _prepare_graph_input(
@@ -185,17 +194,21 @@ class LangGraphPlanAgent:
     ) -> AsyncIterator[AgentEvent]:
         while True:
             interruption: dict[str, Any] | None = None
-            async for mode, chunk in graph.astream(
+            events = graph.astream(
                 graph_input,
                 graph_config,
                 stream_mode=["custom", "updates"],
-            ):
-                if mode == "custom":
-                    yield chunk
-                    continue
-                interrupts = chunk.get("__interrupt__") if isinstance(chunk, dict) else None
-                if interrupts:
-                    interruption = dict(interrupts[0].value)
+            )
+            try:
+                async for mode, chunk in events:
+                    if mode == "custom":
+                        yield chunk
+                        continue
+                    interrupts = chunk.get("__interrupt__") if isinstance(chunk, dict) else None
+                    if interrupts:
+                        interruption = dict(interrupts[0].value)
+            finally:
+                await events.aclose()
             if interruption is None:
                 return
 
@@ -377,7 +390,7 @@ class LangGraphPlanAgent:
         transcript: list[Message] = []
         error = ""
         try:
-            async for event in run_langchain_agent(
+            async for event in run_react_agent(
                 llm_client=self.llm_client,
                 tool_registry=self.tool_registry,
                 system_prompt=self._task_system_prompt(plan, task),
