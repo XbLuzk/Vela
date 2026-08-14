@@ -18,6 +18,20 @@ _ENTRY_COLUMNS = """
     id, scope, content, created_at, kind, source, importance, confidence,
     updated_at, expires_at, access_count, content_hash
 """
+_REQUIRED_COLUMNS = {
+    "id",
+    "scope",
+    "content",
+    "created_at",
+    "kind",
+    "source",
+    "importance",
+    "confidence",
+    "updated_at",
+    "expires_at",
+    "access_count",
+    "content_hash",
+}
 _WORD_RE = re.compile(r"[a-z0-9_]+")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 
@@ -321,22 +335,15 @@ class MemoryManager:
             columns = {
                 str(row["name"]) for row in conn.execute("pragma table_info(memories)").fetchall()
             }
-            migrations = {
-                "kind": "text not null default 'fact'",
-                "source": "text not null default 'legacy'",
-                "importance": "real not null default 0.5",
-                "confidence": "real not null default 1.0",
-                "updated_at": "text not null default ''",
-                "expires_at": "text",
-                "access_count": "integer not null default 0",
-                "content_hash": "text not null default ''",
-            }
-            for name, definition in migrations.items():
-                if name not in columns:
-                    conn.execute(f"alter table memories add column {name} {definition}")
+            missing = sorted(_REQUIRED_COLUMNS - columns)
+            if missing:
+                names = ", ".join(missing)
+                raise RuntimeError(
+                    f"Unsupported memory database schema at {self.db_path}; "
+                    f"missing columns: {names}. "
+                    "Move or delete the old database before starting Vela."
+                )
 
-            conn.execute("drop index if exists idx_memories_scope_hash")
-            self._normalize_and_deduplicate(conn)
             conn.execute("create index if not exists idx_memories_scope on memories(scope, id)")
             conn.execute(
                 """
@@ -357,78 +364,6 @@ class MemoryManager:
                 """
             )
             self._enforce_quota(conn)
-
-    def _normalize_and_deduplicate(self, conn: sqlite3.Connection) -> None:
-        rows = conn.execute(f"select {_ENTRY_COLUMNS} from memories order by id").fetchall()
-        seen: dict[tuple[str, str], dict[str, Any]] = {}
-        now = _now_iso()
-        for row in rows:
-            memory_id = int(row["id"])
-            content = str(row["content"] or "").strip()
-            if not content:
-                conn.execute("delete from memories where id = ?", (memory_id,))
-                continue
-            scope = str(row["scope"] or "")
-            created_at = _coerce_timestamp(row["created_at"], now)
-            updated_at = _coerce_timestamp(row["updated_at"], created_at)
-            state: dict[str, Any] = {
-                "id": memory_id,
-                "scope": scope,
-                "content": content,
-                "created_at": created_at,
-                "kind": _coerce_metadata(row["kind"], "fact"),
-                "source": _coerce_metadata(row["source"], "legacy"),
-                "importance": _coerce_score(row["importance"], 0.5),
-                "confidence": _coerce_score(row["confidence"], 1.0),
-                "updated_at": updated_at,
-                "expires_at": _coerce_optional_timestamp(row["expires_at"]),
-                "access_count": max(int(row["access_count"] or 0), 0),
-                "content_hash": _hash_content(content),
-            }
-            key = (scope, state["content_hash"])
-            keeper = seen.get(key)
-            if keeper is None:
-                self._write_migrated_row(conn, state)
-                seen[key] = state
-                continue
-
-            if state["updated_at"] >= keeper["updated_at"]:
-                keeper["content"] = state["content"]
-                keeper["kind"] = state["kind"]
-                keeper["source"] = state["source"]
-                keeper["updated_at"] = state["updated_at"]
-            keeper["created_at"] = min(keeper["created_at"], state["created_at"])
-            keeper["importance"] = max(keeper["importance"], state["importance"])
-            keeper["confidence"] = max(keeper["confidence"], state["confidence"])
-            keeper["expires_at"] = _merge_expiry(keeper["expires_at"], state["expires_at"])
-            keeper["access_count"] += state["access_count"]
-            self._write_migrated_row(conn, keeper)
-            conn.execute("delete from memories where id = ?", (memory_id,))
-
-    def _write_migrated_row(self, conn: sqlite3.Connection, state: dict[str, Any]) -> None:
-        conn.execute(
-            """
-            update memories
-            set scope = ?, content = ?, created_at = ?, kind = ?, source = ?,
-                importance = ?, confidence = ?, updated_at = ?, expires_at = ?,
-                access_count = ?, content_hash = ?
-            where id = ?
-            """,
-            (
-                state["scope"],
-                state["content"],
-                state["created_at"],
-                state["kind"],
-                state["source"],
-                state["importance"],
-                state["confidence"],
-                state["updated_at"],
-                state["expires_at"],
-                state["access_count"],
-                state["content_hash"],
-                state["id"],
-            ),
-        )
 
     def _purge_expired(self, conn: sqlite3.Connection) -> int:
         cursor = conn.execute(
@@ -528,13 +463,6 @@ def _validate_metadata(value: str, field: str) -> str:
     return normalized
 
 
-def _coerce_metadata(value: Any, fallback: str) -> str:
-    normalized = str(value or "").strip()
-    if not normalized or len(normalized) > _MAX_METADATA_LENGTH:
-        return fallback
-    return normalized
-
-
 def _validate_score(value: float, field: str) -> float:
     try:
         normalized = float(value)
@@ -543,14 +471,6 @@ def _validate_score(value: float, field: str) -> float:
     if not 0 <= normalized <= 1:
         raise ValueError(f"memory {field} must be between 0 and 1")
     return normalized
-
-
-def _coerce_score(value: Any, fallback: float) -> float:
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError):
-        return fallback
-    return min(max(normalized, 0.0), 1.0)
 
 
 def _positive_int(value: int, field: str) -> int:
@@ -583,21 +503,6 @@ def _normalize_optional_timestamp(value: str | datetime | None) -> str | None:
     return parsed.isoformat()
 
 
-def _coerce_optional_timestamp(value: Any) -> str | None:
-    if value is None or not str(value).strip():
-        return None
-    parsed = _parse_timestamp(str(value))
-    return parsed.isoformat() if parsed else None
-
-
-def _coerce_timestamp(value: Any, fallback: str) -> str:
-    parsed = _parse_timestamp(str(value or ""))
-    if parsed:
-        return parsed.isoformat()
-    fallback_parsed = _parse_timestamp(fallback)
-    return fallback_parsed.isoformat() if fallback_parsed else _now_iso()
-
-
 def _parse_timestamp(value: str | datetime) -> datetime | None:
     if isinstance(value, datetime):
         parsed = value
@@ -614,12 +519,6 @@ def _parse_timestamp(value: str | datetime) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
-
-
-def _merge_expiry(left: str | None, right: str | None) -> str | None:
-    if left is None or right is None:
-        return None
-    return max(left, right)
 
 
 def _lexical_features(value: str) -> set[str]:

@@ -8,7 +8,7 @@ import pytest
 from vela.memory import MemoryManager
 
 
-def test_legacy_schema_is_migrated_and_normalized_duplicates_are_merged(tmp_path):
+def test_legacy_schema_is_rejected_with_a_clear_reset_instruction(tmp_path):
     db_path = tmp_path / "memory.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -21,34 +21,9 @@ def test_legacy_schema_is_migrated_and_normalized_duplicates_are_merged(tmp_path
             )
             """
         )
-        conn.execute(
-            "insert into memories(scope, content, created_at) values (?, ?, ?)",
-            ("project", "Vela   Uses Memory", "2026-01-01T00:00:00+00:00"),
-        )
-        conn.execute(
-            "insert into memories(scope, content, created_at) values (?, ?, ?)",
-            ("project", "vela uses memory", "2026-01-02T00:00:00+00:00"),
-        )
 
-    manager = MemoryManager(db_path, scope="project")
-    rows = manager.list()
-
-    assert len(rows) == 1
-    assert rows[0].source == "legacy"
-    assert rows[0].updated_at == "2026-01-02T00:00:00+00:00"
-    assert len(rows[0].content_hash) == 64
-    with sqlite3.connect(db_path) as conn:
-        columns = {row[1] for row in conn.execute("pragma table_info(memories)")}
-    assert {
-        "kind",
-        "source",
-        "importance",
-        "confidence",
-        "updated_at",
-        "expires_at",
-        "access_count",
-        "content_hash",
-    } <= columns
+    with pytest.raises(RuntimeError, match="Move or delete the old database"):
+        MemoryManager(db_path, scope="project")
 
 
 def test_save_rejects_empty_oversized_and_invalid_scores(tmp_path):

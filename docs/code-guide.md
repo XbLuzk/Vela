@@ -9,7 +9,8 @@
 
 1. `src/vela/entrypoints/cli.py::main`：解析命令行参数，选择交互模式或单次任务。
 2. `src/vela/entrypoints/repl.py::start_repl`：组装模型、工具、Agent 和 Session。
-3. `src/vela/entrypoints/repl.py::_repl_loop`：读取用户输入并启动当前任务。
+3. `src/vela/entrypoints/repl.py::_repl_loop`：读取输入；具体命令和任务执行分别交给
+   `repl_commands.py`、`repl_tasks.py`。
 4. `src/vela/agent/agent.py::Agent.run`：根据 `react / plan` 选择执行方式。
 5. `src/vela/run_trace/tracker.py::RunTracker.stream`：增加 Run ID、分层 Span，并统一收尾。
 6. `src/vela/agent/react_runtime.py::run_react_agent`：执行“模型回复 → 工具调用 → 工具结果 → 再次回复”。
@@ -18,17 +19,18 @@
 
 ## 2. ReAct 循环怎么读
 
-`run_react_agent()` 的主循环直接写在一个函数里，可以按五段理解：
+`run_react_agent()` 只保留轮次循环，可以按五段理解：
 
 1. 把历史消息、本次请求、Skill 和系统提示词组装成模型输入。
-2. `_stream_model_turn()` 直接读取 Vela 的 `LlmEvent`，拼出一次完整的模型回复。
+2. `_stream_react_turn()` 执行一轮；`agent/model_turn.py::stream_model_turn` 把 Provider 的
+   `LlmEvent` 拼成完整回复和工具调用。
 3. 没有工具调用就结束；有工具调用就进入 `_execute_tool_round()`。
 4. `ToolExecutor` 负责并发只读工具、串行写工具、HITL 和工具 Journal。
 5. 工具结果写回消息历史，下一轮模型调用继续处理。
 
-运行中输入的 steering 由 `src/vela/task_control.py::InteractiveTaskController` 暂存；ReAct 只在一次
-模型回复和工具调用都结束后取一条，避免改写正在执行的轮次。显式 follow-up 则在前一请求完成后串行
-启动，不会创建并发 Agent。
+运行中输入由 `InteractiveTaskController` 按 steering 和 follow-up 分队列保存；它还统一编排
+任务生命周期、工具审批、Plan 确认和串行 follow-up。ReAct 只在一次模型回复和工具调用都结束后
+取一条 steering，避免改写正在执行的轮次；follow-up 在前一请求完成后启动，不会创建并发 Agent。
 
 这条普通 ReAct 链路不依赖高层 Agent 框架，因此可以直接看到循环条件、消息变化和异常出口。
 
@@ -63,6 +65,7 @@
 - `src/vela/run_trace/store.py`：以 JSONL 追加保存 Trace，并提供倒序和 Run ID 查询。
 - `src/vela/run_trace/context.py`：只在拉取 Agent 工作时绑定当前 Run ID，供工具 Audit 自动关联。
 - `src/vela/entrypoints/repl_commands.py`：实现配置、上下文、Memory、Skill 等斜杠命令。
+- `src/vela/entrypoints/repl_tasks.py`：运行 ReAct / Plan，并确保取消或失败后仍保存 Session。
 - `src/vela/entrypoints/repl_ui.py`：输入框、快捷键和底部状态栏；它不参与 Agent 决策。
 - `src/vela/render/rich_renderer.py`：把 Agent 事件显示到终端。
 
