@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from importlib.resources import files
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 AssertionType = Literal[
@@ -80,9 +81,20 @@ def load_suite(path: str | Path) -> EvalSuite:
     """Load and validate a compact JSON task suite."""
     source = Path(path)
     value = json.loads(source.read_text(encoding="utf-8"))
+    return _parse_suite(value, fallback_name=source.stem)
+
+
+def load_builtin_suite() -> EvalSuite:
+    """Load the trusted evaluation suite shipped inside the Vela wheel."""
+    resource = files("vela.eval").joinpath("coding-smoke.json")
+    value = json.loads(resource.read_text(encoding="utf-8"))
+    return _parse_suite(value, fallback_name="coding-smoke")
+
+
+def _parse_suite(value: object, *, fallback_name: str) -> EvalSuite:
     if not isinstance(value, dict) or not isinstance(value.get("cases"), list):
         raise ValueError("Eval suite must contain a cases array")
-    name = str(value.get("name") or source.stem).strip()
+    name = str(value.get("name") or fallback_name).strip()
     if not name:
         raise ValueError("Eval suite name must not be empty")
     cases = tuple(_parse_case(item) for item in value["cases"])
@@ -109,6 +121,8 @@ def _parse_case(value: object) -> EvalCase:
         isinstance(key, str) and isinstance(content, str) for key, content in files.items()
     ):
         raise ValueError(f"Eval case {case_id} files must map paths to text")
+    for path in files:
+        _validate_relative_path(path, label=f"Eval case {case_id} fixture")
     if not isinstance(assertions, list) or not assertions:
         raise ValueError(f"Eval case {case_id} needs at least one assertion")
     return EvalCase(
@@ -137,12 +151,25 @@ def _parse_assertion(value: object) -> EvalAssertion:
     if assertion_type == "command_succeeds" and (
         not isinstance(command, list)
         or not command
-        or not all(isinstance(item, str) for item in command)
+        or not all(isinstance(item, str) and item.strip() for item in command)
     ):
         raise ValueError("command_succeeds needs a non-empty command array")
+    path = str(value.get("path") or "").strip()
+    expected = str(value.get("value") or "")
+    if assertion_type in {"file_contains", "file_exists", "file_not_exists"}:
+        _validate_relative_path(path, label=assertion_type)
+    if assertion_type in {"file_contains", "response_contains"} and not expected.strip():
+        raise ValueError(f"{assertion_type} needs a non-empty value")
     return EvalAssertion(
         type=assertion_type,  # type: ignore[arg-type]
-        path=str(value.get("path") or ""),
-        value=str(value.get("value") or ""),
+        path=path,
+        value=expected,
         command=tuple(command),
     )
+
+
+def _validate_relative_path(path: str, *, label: str) -> None:
+    normalized = path.strip().replace("\\", "/")
+    parsed = PurePosixPath(normalized)
+    if not normalized or parsed.is_absolute() or ".." in parsed.parts:
+        raise ValueError(f"{label} path escapes workspace: {path}")

@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import pytest
 
 from vela.agent import Agent
 from vela.config import VelaConfig
+from vela.context import ContextOverflowError
 from vela.llm.openai_compatible import OpenAICompatibleClient
 from vela.tools import ToolRegistry
 from vela.types import Message, Usage
@@ -49,6 +51,49 @@ def test_timeout_becomes_recoverable_error_event(monkeypatch) -> None:
 
     assert [event["type"] for event in events] == ["message_start", "error"]
     assert "timed out after 120s" in str(events[-1]["error"])
+
+
+def test_provider_context_limit_is_classified_for_agent_recovery(monkeypatch) -> None:
+    def fail_stream(*args, **kwargs):
+        request = httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
+        response = httpx.Response(
+            400,
+            request=request,
+            json={"error": {"code": "context_length_exceeded", "message": "too many tokens"}},
+        )
+        raise httpx.HTTPStatusError("context overflow", request=request, response=response)
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fail_stream)
+
+    events = asyncio.run(_collect_chat_events(_client()))
+
+    assert isinstance(events[-1]["error"], ContextOverflowError)
+
+
+@pytest.mark.parametrize("status_code", [400, 413])
+def test_unread_streaming_context_limit_body_is_classified(monkeypatch, status_code) -> None:
+    request = httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
+    response = httpx.Response(
+        status_code,
+        request=request,
+        stream=httpx.ByteStream(b'{"error":{"message":"context length exceeded"}}'),
+    )
+
+    class StreamingResponse:
+        async def __aenter__(self):
+            return response
+
+        async def __aexit__(self, *args):  # noqa: ANN002
+            return None
+
+    def stream(*args, **kwargs):  # noqa: ARG001
+        return StreamingResponse()
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", stream)
+
+    events = asyncio.run(_collect_chat_events(_client()))
+
+    assert isinstance(events[-1]["error"], ContextOverflowError)
 
 
 def test_agent_propagates_connection_error_without_raising(tmp_path, monkeypatch) -> None:

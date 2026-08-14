@@ -9,6 +9,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+import httpx
+
 from vela_rag.chunker import chunk_file, discover_source_files, file_digest
 from vela_rag.embedding import EmbeddingClient
 from vela_rag.models import CodeChunk, IndexStats, SearchHit
@@ -30,13 +32,19 @@ class CodeIndex:
         self.root = Path(root).resolve()
         self.database = Path(database).expanduser().resolve()
         self.embedder = embedder
+        self.last_warning: str | None = None
         if not self.root.is_dir():
             raise ValueError(f"Repository root does not exist: {self.root}")
-        self.database.parent.mkdir(parents=True, exist_ok=True)
+        parent_existed = self.database.parent.exists()
+        self.database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not parent_existed:
+            self.database.parent.chmod(0o700)
         self._initialize()
+        self.database.chmod(0o600)
 
     def rebuild(self) -> IndexStats:
         """Incrementally update changed files and remove deleted files."""
+        self.last_warning = None
         files = list(discover_source_files(self.root))
         relative_paths = {path.relative_to(self.root).as_posix() for path in files}
         with self._connect() as connection:
@@ -44,27 +52,45 @@ class CodeIndex:
                 str(row["path"]): str(row["digest"])
                 for row in connection.execute("SELECT path, digest FROM files")
             }
-            removed = sorted(set(known) - relative_paths)
+        removed = sorted(set(known) - relative_paths)
+        updates: list[tuple[str, str, list[CodeChunk]]] = []
+        for path in files:
+            relative = path.relative_to(self.root).as_posix()
+            digest = self._index_digest(file_digest(path))
+            if known.get(relative) != digest:
+                updates.append((relative, digest, chunk_file(path, self.root)))
+
+        all_chunks = [chunk for _, _, chunks in updates for chunk in chunks]
+        vectors = self._embed_chunks(all_chunks)
+        vectors_by_id = {
+            chunk.chunk_id: vector for chunk, vector in zip(all_chunks, vectors, strict=True)
+        }
+        with self._connect() as connection:
             for relative in removed:
                 self._delete_file(connection, relative)
-
-            updated = 0
-            for path in files:
-                relative = path.relative_to(self.root).as_posix()
-                digest = self._index_digest(file_digest(path))
-                if known.get(relative) == digest:
-                    continue
-                self._replace_file(connection, relative, digest, chunk_file(path, self.root))
-                updated += 1
-        return self.stats(updated_files=updated, removed_files=len(removed))
+            for relative, digest, chunks in updates:
+                embeddings = [vectors_by_id[chunk.chunk_id] for chunk in chunks]
+                self._replace_file(connection, relative, digest, chunks, embeddings)
+        return self.stats(updated_files=len(updates), removed_files=len(removed))
 
     def search(self, query: str, *, limit: int = 8) -> list[SearchHit]:
+        self.last_warning = None
         query = query.strip()
         if not query or limit < 1:
             return []
         with self._connect() as connection:
             lexical = self._lexical_ranking(connection, query)
-            semantic = self._semantic_ranking(connection, query)
+            try:
+                semantic = self._semantic_ranking(connection, query)
+            except (
+                OSError,
+                RuntimeError,
+                httpx.HTTPError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as exc:
+                self.last_warning = f"Semantic search unavailable: {type(exc).__name__}"
+                semantic = []
             scores: dict[str, float] = {}
             for ranking in (lexical, semantic):
                 for rank, chunk_id in enumerate(ranking, start=1):
@@ -144,9 +170,9 @@ class CodeIndex:
         relative: str,
         digest: str,
         chunks: list[CodeChunk],
+        embeddings: list[list[float] | None],
     ) -> None:
         self._delete_file(connection, relative)
-        embeddings = self._embed_chunks(chunks)
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             connection.execute(
                 "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -183,12 +209,16 @@ class CodeIndex:
         if self.embedder is None:
             return [None] * len(chunks)
         embeddings: list[list[float]] = []
-        for offset in range(0, len(chunks), 64):
-            batch = chunks[offset : offset + 64]
-            values = self.embedder.embed([chunk.content for chunk in batch])
-            if len(values) != len(batch):
-                raise RuntimeError("Embedding provider returned an unexpected result count")
-            embeddings.extend(values)
+        try:
+            for offset in range(0, len(chunks), 64):
+                batch = chunks[offset : offset + 64]
+                values = self.embedder.embed([chunk.content for chunk in batch])
+                if len(values) != len(batch):
+                    raise RuntimeError("Embedding provider returned an unexpected result count")
+                embeddings.extend(values)
+        except (OSError, RuntimeError, httpx.HTTPError, ValueError) as exc:
+            self.last_warning = f"Embeddings unavailable; indexed lexically: {type(exc).__name__}"
+            return [None] * len(chunks)
         return embeddings
 
     def _index_digest(self, content_digest: str) -> str:

@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from vela.config import load_config
-from vela.mcp import McpClientManager
+from vela.mcp import McpClientManager, load_mcp_server_specs
 from vela.mcp.client import _stdio_environment
 from vela.tools.base import ToolContext
 
@@ -123,3 +123,23 @@ def test_mcp_stdio_environment_does_not_inherit_parent_secrets(monkeypatch):
     assert "SAFE_SETTING" not in env
     assert env["GITHUB_TOKEN"] == "explicit-mcp-token"
     assert env["LANG"] == "zh_CN.UTF-8"
+
+
+def test_untrusted_mcp_loading_keeps_user_servers_and_ignores_project(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    (home / ".vela").mkdir(parents=True)
+    (project / ".vela").mkdir(parents=True)
+    (home / ".vela" / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"user": {"command": "user-server"}}}),
+        encoding="utf-8",
+    )
+    (project / ".vela" / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"project": {"command": "project-server"}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    specs = load_mcp_server_specs(project, include_project=False)
+
+    assert set(specs) == {"user"}

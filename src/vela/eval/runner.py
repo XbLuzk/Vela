@@ -54,26 +54,30 @@ class EvalRunner:
 
     async def _run_case(self, case: EvalCase) -> CaseResult:
         workspace = _case_workspace(self.workspace_root, case.id)
-        if workspace.exists():
-            shutil.rmtree(workspace)
-        workspace.mkdir(parents=True)
-        _write_fixtures(workspace, case.files)
-        agent = await self.agent_factory(workspace, case)
-        self._model = agent.llm_client.model_name
-        self._provider = agent.llm_client.provider_name
+        agent: Agent | None = None
+        result = None
         response = ""
         error: str | None = None
         started = time.monotonic()
         try:
+            if workspace.exists():
+                shutil.rmtree(workspace)
+            workspace.mkdir(parents=True)
+            _write_fixtures(workspace, case.files)
+            agent = await self.agent_factory(workspace, case)
+            self._model = agent.llm_client.model_name
+            self._provider = agent.llm_client.provider_name
             result = await agent.run_complete(case.prompt)
             response = result.text
         except Exception as exc:  # noqa: BLE001 - failed cases are evaluation data
-            result = None
             error = type(exc).__name__
         duration_ms = max(0, round((time.monotonic() - started) * 1_000))
         assertion_results = tuple(
             await asyncio.gather(
-                *(_score_assertion(assertion, workspace, response) for assertion in case.assertions)
+                *(
+                    _score_assertion_safely(assertion, workspace, response)
+                    for assertion in case.assertions
+                )
             )
         )
         passed_count = sum(item.passed for item in assertion_results)
@@ -84,7 +88,7 @@ class EvalRunner:
             duration_ms=duration_ms,
             total_tokens=result.total_tokens if result else 0,
             turns=result.turns if result else 0,
-            tool_calls=agent.last_run_trace.tool_calls if agent.last_run_trace else 0,
+            tool_calls=(agent.last_run_trace.tool_calls if agent and agent.last_run_trace else 0),
             response=response,
             error=error,
             assertions=assertion_results,
@@ -103,16 +107,67 @@ def write_result(result: SuiteResult, path: str | Path) -> Path:
 
 def load_result(path: str | Path) -> dict[str, Any]:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or not isinstance(value.get("cases"), list):
-        raise ValueError("Invalid eval result")
+    _validate_result(value)
     return value
+
+
+def _validate_result(value: object) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("Invalid eval result")
+    _require_non_empty_string(value, "suite")
+    _require_rate(value, "success_rate")
+    for field in ("total_tokens", "duration_p50_ms", "duration_p95_ms"):
+        _require_nonnegative_int(value, field)
+    cases = value.get("cases")
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("Invalid eval result cases")
+    for case in cases:
+        if not isinstance(case, dict):
+            raise ValueError("Invalid eval result case")
+        _require_non_empty_string(case, "id")
+        if not isinstance(case.get("passed"), bool):
+            raise ValueError("Invalid eval result case passed")
+
+
+def _require_non_empty_string(value: dict[str, Any], field: str) -> None:
+    if not isinstance(value.get(field), str) or not value[field].strip():
+        raise ValueError(f"Invalid eval result {field}")
+
+
+def _require_rate(value: dict[str, Any], field: str) -> None:
+    item = value.get(field)
+    if (
+        isinstance(item, bool)
+        or not isinstance(item, (int, float))
+        or not math.isfinite(item)
+        or not 0 <= item <= 1
+    ):
+        raise ValueError(f"Invalid eval result {field}")
+
+
+def _require_nonnegative_int(value: dict[str, Any], field: str) -> None:
+    item = value.get(field)
+    if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+        raise ValueError(f"Invalid eval result {field}")
 
 
 def compare_results(baseline: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
     """Return concise quality, cost, and latency deltas between two runs."""
+    if baseline.get("suite") != current.get("suite"):
+        raise ValueError(
+            f"Eval suites differ: {baseline.get('suite')!r} != {current.get('suite')!r}"
+        )
     baseline_cases = {str(case["id"]): case for case in baseline["cases"]}
     current_cases = {str(case["id"]): case for case in current["cases"]}
-    shared = sorted(set(baseline_cases) & set(current_cases))
+    if len(baseline_cases) != len(baseline["cases"]) or len(current_cases) != len(current["cases"]):
+        raise ValueError("Eval result case IDs must be unique")
+    baseline_ids = set(baseline_cases)
+    current_ids = set(current_cases)
+    if baseline_ids != current_ids:
+        removed = sorted(baseline_ids - current_ids)
+        added = sorted(current_ids - baseline_ids)
+        raise ValueError(f"Eval case sets differ: removed={removed}, added={added}")
+    shared = sorted(baseline_ids)
     regressions = [
         case_id
         for case_id in shared
@@ -168,6 +223,21 @@ async def _score_assertion(
         passed,
         f"{assertion.path} contains {assertion.value!r}",
     )
+
+
+async def _score_assertion_safely(
+    assertion: EvalAssertion,
+    workspace: Path,
+    response: str,
+) -> AssertionResult:
+    try:
+        return await _score_assertion(assertion, workspace, response)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return AssertionResult(
+            assertion.type,
+            False,
+            f"assertion failed: {type(exc).__name__}",
+        )
 
 
 def _run_command_assertion(assertion: EvalAssertion, workspace: Path) -> AssertionResult:

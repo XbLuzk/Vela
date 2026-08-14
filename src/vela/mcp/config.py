@@ -22,10 +22,17 @@ class McpServerSpec:
     timeout: float = 30.0
 
 
-def load_mcp_server_specs(project_root: str | Path) -> dict[str, McpServerSpec]:
+def load_mcp_server_specs(
+    project_root: str | Path,
+    *,
+    include_project: bool = True,
+) -> dict[str, McpServerSpec]:
     root = Path(project_root).resolve()
     merged: dict[str, Any] = {}
-    for path in [Path.home() / ".vela" / "mcp.json", root / ".vela" / "mcp.json"]:
+    paths = [Path.home() / ".vela" / "mcp.json"]
+    if include_project:
+        paths.append(root / ".vela" / "mcp.json")
+    for path in paths:
         data = _read_json(path)
         if not data:
             continue

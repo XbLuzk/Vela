@@ -23,11 +23,15 @@ def show_run_traces(
         try:
             trace = store.find(reference)
         except ValueError as exc:
-            console.print(f"[red]{exc}[/red]")
+            _print_trace_error(console, str(exc), json_output=json_output)
             return False
         if trace is None:
             _print_store_warning(console, store)
-            console.print(f"[red]Run trace not found:[/red] {reference}")
+            _print_trace_error(
+                console,
+                f"Run trace not found: {reference}",
+                json_output=json_output,
+            )
             return False
         _print_store_warning(console, store)
         console.print_json(json.dumps(trace, ensure_ascii=False))
@@ -83,3 +87,9 @@ def _duration(milliseconds: int) -> str:
 def _print_store_warning(console: Console, store: RunTraceStore) -> None:
     if store.last_warning:
         Console(stderr=True).print(f"[yellow]{store.last_warning}[/yellow]")
+
+
+def _print_trace_error(console: Console, message: str, *, json_output: bool) -> None:
+    if json_output:
+        console.print_json("null")
+    Console(stderr=True).print(f"[red]{message}[/red]")

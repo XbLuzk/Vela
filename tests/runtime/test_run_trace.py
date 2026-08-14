@@ -11,7 +11,7 @@ import vela.agent.agent as agent_module
 from vela.agent import Agent
 from vela.config import load_config
 from vela.events import AgentEvent
-from vela.run_trace import RunTraceStore, RunTracker
+from vela.run_trace import RunTraceStore, RunTracker, current_run_id
 from vela.tools import ToolRegistry
 
 
@@ -81,6 +81,20 @@ def test_tracker_emits_lifecycle_and_persists_completed_summary(tmp_path) -> Non
     assert tool_span["attributes"]["tool_call_id"] == "call_1"
 
 
+def test_tracker_binds_run_id_only_while_pulling_agent_work(tmp_path) -> None:
+    tracker = _tracker(RunTraceStore(tmp_path / "runs.jsonl"))
+    observed: list[str | None] = []
+
+    async def source():
+        observed.append(current_run_id())
+        yield {"type": "done", "total_turns": 0}
+
+    asyncio.run(_collect(tracker.stream(source())))
+
+    assert observed == [tracker.trace.run_id]
+    assert current_run_id() is None
+
+
 def test_plan_trace_nests_model_and_tool_spans_under_task(tmp_path) -> None:
     store = RunTraceStore(tmp_path / "runs.jsonl")
     tracker = RunTracker(
@@ -132,6 +146,40 @@ def test_plan_trace_nests_model_and_tool_spans_under_task(tmp_path) -> None:
     assert plan_span["kind"] == "plan_node"
     assert turn_span["parent_span_id"] == plan_span["span_id"]
     assert tool_span["parent_span_id"] == turn_span["span_id"]
+    assert "description" not in plan_span["attributes"]
+
+
+@pytest.mark.parametrize(
+    ("terminal_event", "expected_status"),
+    [
+        ({"type": "error", "error": RuntimeError("failed")}, "failed"),
+        ({"type": "error", "error": asyncio.CancelledError()}, "cancelled"),
+    ],
+)
+def test_terminal_run_settles_all_open_spans(tmp_path, terminal_event, expected_status) -> None:
+    store = RunTraceStore(tmp_path / "runs.jsonl")
+    tracker = _tracker(store)
+
+    asyncio.run(
+        _collect(
+            tracker.stream(
+                _events(
+                    {"type": "turn_started", "turn": 1},
+                    {
+                        "type": "tool_call",
+                        "tool_call_id": "call_1",
+                        "name": "read_file",
+                        "input": {},
+                    },
+                    terminal_event,
+                )
+            )
+        )
+    )
+
+    trace = store.list(limit=1)[0]
+    assert trace["status"] == expected_status
+    assert {span["status"] for span in trace["spans"]} == {expected_status}
 
 
 def test_error_trace_is_settled_before_consumer_closes_stream(tmp_path) -> None:
@@ -557,7 +605,7 @@ def _usage(input_tokens: int, output_tokens: int):
 class _DoneClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1_000
+    max_context_window = 20_000
 
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
         yield {"type": "message_end", "stop_reason": "end_turn"}

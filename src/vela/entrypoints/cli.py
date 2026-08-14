@@ -48,6 +48,11 @@ from vela.entrypoints.trace_command import show_run_traces
 from vela.llm import create_llm_client
 from vela.mcp import load_mcp_server_specs, write_chrome_devtools_config, write_code_rag_config
 from vela.run_trace import RunTraceStore
+from vela.trust import (
+    ProjectTrustStore,
+    has_trust_sensitive_resources,
+    resolve_project_trust,
+)
 
 app = typer.Typer(
     name=CLI_NAME,
@@ -66,6 +71,27 @@ def _version_callback(value: bool) -> None:
     if value:
         typer.echo(f"{CLI_NAME} {__version__}")
         raise typer.Exit()
+
+
+def _resolve_cli_project_trust(
+    root: Path,
+    *,
+    interactive: bool,
+    override: bool | None,
+) -> bool:
+    if override is not None:
+        return override
+    if not has_trust_sensitive_resources(root):
+        return True
+    return resolve_project_trust(
+        root,
+        interactive=interactive,
+        override=None,
+        prompt=lambda path: typer.confirm(
+            f"Trust project {path}? This enables its .env, Vela config, MCP servers, and Skills",
+            default=False,
+        ),
+    )
 
 
 @app.callback()
@@ -112,6 +138,13 @@ def main(
         Path | None,
         typer.Option("--cwd", help="Working directory (default: current dir)"),
     ] = None,
+    trust_project: Annotated[
+        bool | None,
+        typer.Option(
+            "--trust-project/--no-trust-project",
+            help="Allow or ignore project-local config, MCP servers, and Skills for this run",
+        ),
+    ] = None,
     # --- Version ---
     version: Annotated[
         bool,
@@ -133,6 +166,11 @@ def main(
             "--resume is available only for interactive sessions",
             param_hint="--resume",
         )
+    project_trusted = _resolve_cli_project_trust(
+        root,
+        interactive=prompt is None,
+        override=trust_project,
+    )
 
     # Build overrides dict from all explicit CLI flags.
     overrides: dict = {}
@@ -147,7 +185,11 @@ def main(
         llm_overrides["base_url"] = base_url
     if llm_overrides:
         overrides["llm"] = llm_overrides
-    config = load_config(project_root=root, overrides=overrides)
+    config = load_config(
+        project_root=root,
+        overrides=overrides,
+        include_project=project_trusted,
+    )
 
     if prompt is not None:
         selected_mode = (mode or config.prompt.agent_mode or "react").lower()
@@ -177,7 +219,9 @@ def doctor(
 ) -> None:
     """Inspect the system: Python, uv, Node, API key, and config."""
     root = (cwd or Path.cwd()).resolve()
-    config = load_config(project_root=root)
+    saved_trust = ProjectTrustStore().get(root)
+    project_trusted = saved_trust is True or not has_trust_sensitive_resources(root)
+    config = load_config(project_root=root, include_project=project_trusted)
     checks = {
         "python": sys.version.split()[0],
         "uv": shutil.which("uv") or "missing",
@@ -188,7 +232,10 @@ def doctor(
         "provider": config.llm.provider,
         "model": config.llm.model,
         "cwd": str(root),
-        "config_paths": [str(path) for path in get_config_paths(root)],
+        "project_trusted": project_trusted,
+        "config_paths": [
+            str(path) for path in get_config_paths(root, include_project=project_trusted)
+        ],
     }
     console.print_json(json.dumps(checks, ensure_ascii=False))
 
@@ -217,22 +264,40 @@ def trace_command(
 
 @eval_app.command("run")
 def eval_run(
-    suite: Annotated[Path, typer.Argument(help="JSON evaluation suite")],
+    suite: Annotated[
+        Path | None,
+        typer.Argument(help="Optional custom JSON suite; defaults to Vela's coding smoke suite"),
+    ] = None,
     cwd: Annotated[Path | None, typer.Option("--cwd", help="Project root")] = None,
     output: Annotated[Path | None, typer.Option("--output", help="Result JSON path")] = None,
     workspace: Annotated[
         Path | None,
         typer.Option("--workspace", help="Directory for isolated case workspaces"),
     ] = None,
+    allow_code_execution: Annotated[
+        bool,
+        typer.Option(
+            "--allow-code-execution",
+            help="Trust a custom suite that can instruct the Agent and run assertion commands",
+        ),
+    ] = False,
 ) -> None:
     """Run fixed tasks and record success, latency, tokens, and tool calls."""
     root = (cwd or Path.cwd()).resolve()
-    config = load_config(project_root=root)
+    saved_trust = ProjectTrustStore().get(root)
+    project_trusted = saved_trust is True or not has_trust_sensitive_resources(root)
+    config = load_config(project_root=root, include_project=project_trusted)
     if not config.llm.api_key:
         raise typer.BadParameter("LLM API key is required to run an evaluation")
+    if suite is not None and not allow_code_execution:
+        raise typer.BadParameter(
+            "Custom eval suites can execute Agent tools and assertion commands; "
+            "review the file and pass --allow-code-execution",
+            param_hint="suite",
+        )
     target, result = asyncio.run(
         run_eval_suite(
-            suite.resolve(),
+            suite.resolve() if suite else None,
             project_root=root,
             config=config,
             output=output.resolve() if output else None,
@@ -250,7 +315,10 @@ def eval_compare(
     current: Annotated[Path, typer.Argument(help="Current result JSON")],
 ) -> None:
     """Compare two evaluation runs and fail when a case regresses."""
-    comparison = compare_eval_files(baseline.resolve(), current.resolve())
+    try:
+        comparison = compare_eval_files(baseline.resolve(), current.resolve())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(json.dumps(comparison, ensure_ascii=False, indent=2))
     if comparison["regressions"]:
         raise typer.Exit(1)

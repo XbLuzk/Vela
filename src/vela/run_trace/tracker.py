@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import cast
 
 from vela.events import AgentEvent, RunStatus, TraceSpanKind, TraceSpanStatus
+from vela.run_trace.context import bind_run_id, reset_run_id
 from vela.run_trace.models import RunTrace, TraceSpan
 from vela.run_trace.store import RunTraceStore
 from vela.types import Usage
@@ -51,7 +52,15 @@ class RunTracker:
     async def stream(self, events: AsyncIterable[AgentEvent]) -> AsyncIterator[AgentEvent]:
         try:
             yield self._start_event()
-            async for event in events:
+            iterator = events.__aiter__()
+            while True:
+                token = bind_run_id(self.trace.run_id)
+                try:
+                    event = await anext(iterator)
+                except StopAsyncIteration:
+                    break
+                finally:
+                    reset_run_id(token)
                 decorated = self._observe(event)
                 if decorated["type"] in {"done", "error"}:
                     status = self._terminal_status(decorated)
@@ -142,7 +151,8 @@ class RunTracker:
             kind="plan_node",
             name=task_id,
             parent_span_id=None,
-            attributes={"description": str(event.get("task_description") or "")},
+            # Task descriptions are user/model content and therefore stay out of persisted traces.
+            attributes={},
         )
         self._plan_spans[task_id] = span.span_id
 
@@ -156,6 +166,7 @@ class RunTracker:
                 "after_tokens": int(event.get("after_tokens") or 0),
                 "summarized_messages": int(event.get("summarized_messages") or 0),
                 "truncated_tool_results": int(event.get("truncated_tool_results") or 0),
+                "recovered_from_overflow": bool(event.get("recovered_from_overflow")),
             },
         )
         self._close_span(span, "completed")

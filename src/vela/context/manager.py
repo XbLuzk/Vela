@@ -41,6 +41,10 @@ class ContextResult:
     omitted_tool_characters: int = 0
 
 
+class ContextOverflowError(ValueError):
+    """The immutable prompt or newest complete turn cannot fit the model budget."""
+
+
 class ContextEngine:
     """Transform Agent history into a bounded, provider-ready model context.
 
@@ -92,8 +96,9 @@ class ContextEngine:
 
         split_at = self._recent_boundary(transformed)
         if over_message_limit:
-            split_at = max(split_at, len(transformed) - self.max_history_messages)
-            split_at = self._align_boundary(transformed, split_at)
+            retained_capacity = max(1, self.max_history_messages - 1)
+            message_limit = len(transformed) - retained_capacity
+            split_at = max(split_at, self._next_user_boundary(transformed, message_limit))
 
         older = transformed[:split_at]
         recent = [_copy_message(message) for message in transformed[split_at:]]
@@ -122,6 +127,11 @@ class ContextEngine:
         if after > self.budget.compression_target_tokens and compacted:
             compacted = self._shrink_summary(compacted, system_prompt, tool_definitions or [])
             after = self._estimate_request(compacted, system_prompt, tool_definitions or [])
+        compacted, after = self._enforce_input_limit(
+            compacted,
+            system_prompt,
+            tool_definitions or [],
+        )
 
         return ContextResult(
             compacted,
@@ -133,11 +143,71 @@ class ContextEngine:
             omitted_tool_characters=omitted_characters,
         )
 
+    def recover_from_overflow(
+        self,
+        messages: list[Message],
+        *,
+        system_prompt: str = "",
+        tool_definitions: list[dict] | None = None,
+    ) -> ContextResult:
+        """Make one stricter, lossy reduction after a provider rejects the estimated context."""
+        definitions = tool_definitions or []
+        prepared = self.prepare(
+            messages,
+            system_prompt=system_prompt,
+            tool_definitions=definitions,
+        )
+        result = [_copy_message(message) for message in prepared.messages]
+        before = self._estimate_request(result, system_prompt, definitions)
+        target = max(256, int(self.budget.available_input_tokens * 0.7))
+        removed = 0
+
+        while result:
+            estimated = self._estimate_request(result, system_prompt, definitions)
+            if estimated <= target and removed:
+                break
+            if "conversation-summary" in _message_text(result[0]):
+                result.pop(0)
+                removed += 1
+                continue
+            user_boundaries = [
+                index for index, message in enumerate(result) if message.role == "user"
+            ]
+            if len(user_boundaries) < 2:
+                break
+            cutoff = user_boundaries[1]
+            removed += cutoff
+            result = result[cutoff:]
+
+        after = self._estimate_request(result, system_prompt, definitions)
+        if not removed or after > self.budget.available_input_tokens:
+            raise ContextOverflowError(
+                "The provider rejected the context and no older complete turn can be removed."
+            )
+        return ContextResult(
+            messages=result,
+            estimated_tokens_before=before,
+            estimated_tokens_after=after,
+            compressed=True,
+            summarized_messages=removed,
+            truncated_tool_results=prepared.truncated_tool_results,
+            omitted_tool_characters=prepared.omitted_tool_characters,
+        )
+
     def _recent_boundary(self, messages: list[Message]) -> int:
         if len(messages) <= self.min_recent_messages:
             return 0
         candidate = len(messages) - self.min_recent_messages
         return self._align_boundary(messages, candidate)
+
+    @staticmethod
+    def _next_user_boundary(messages: list[Message], candidate: int) -> int:
+        """Move a cutoff forward so a retained tool-call group stays complete."""
+        candidate = min(max(candidate, 0), len(messages))
+        for index in range(candidate, len(messages)):
+            if messages[index].role == "user":
+                return index
+        return candidate
 
     @staticmethod
     def _align_boundary(messages: list[Message], candidate: int) -> int:
@@ -215,6 +285,34 @@ class ContextEngine:
                     result[0].content[: max_chars - len(closing) - 3] + "..." + closing
                 )
         return result
+
+    def _enforce_input_limit(
+        self,
+        messages: list[Message],
+        system_prompt: str,
+        tool_definitions: list[dict],
+    ) -> tuple[list[Message], int]:
+        """Drop older complete turns, then fail rather than exceed the provider budget."""
+        result = [_copy_message(message) for message in messages]
+        limit = self.budget.available_input_tokens
+        estimated = self._estimate_request(result, system_prompt, tool_definitions)
+        while estimated > limit:
+            if result and "conversation-summary" in _message_text(result[0]):
+                result.pop(0)
+            else:
+                user_boundaries = [
+                    index for index, message in enumerate(result) if message.role == "user"
+                ]
+                if len(user_boundaries) < 2:
+                    break
+                result = result[user_boundaries[1] :]
+            estimated = self._estimate_request(result, system_prompt, tool_definitions)
+        if estimated > limit:
+            raise ContextOverflowError(
+                "The current request and required prompt exceed the model input budget "
+                f"({estimated} estimated tokens > {limit})."
+            )
+        return result, estimated
 
     @staticmethod
     def _estimate_request(

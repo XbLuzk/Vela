@@ -7,6 +7,7 @@ from typing import Any
 
 from vela.policy import AuditLog
 from vela.tools.base import Tool, ToolContext, ToolDecision, ToolResult
+from vela.tools.calls import tool_call_arguments, tool_call_name
 from vela.tools.journal import ToolExecutionJournal, execution_identity
 from vela.tools.registry import ToolRegistry
 
@@ -43,7 +44,7 @@ class ToolExecutor:
         sequential_calls: list[tuple[dict[str, Any], Tool | None, int]] = []
 
         for call in calls:
-            name = _tool_call_name(call)
+            name = tool_call_name(call)
             tool = self.registry.get(name)
             sequence = -1
             if tool is not None and not tool.is_read_only:
@@ -85,8 +86,8 @@ class ToolExecutor:
         sequence: int,
     ) -> ToolResult:
         tool_call_id = str(call.get("id") or "")
-        name = _tool_call_name(call)
-        payload = _tool_call_arguments(call)
+        name = tool_call_name(call)
+        payload = tool_call_arguments(call)
 
         if not tool:
             return ToolResult(
@@ -309,25 +310,6 @@ class ToolExecutor:
         if asyncio.iscoroutine(result):
             result = await result
         return result
-
-
-def _tool_call_name(call: dict[str, Any]) -> str:
-    function = call.get("function") if isinstance(call.get("function"), dict) else {}
-    return str(function.get("name") or call.get("name") or "")
-
-
-def _tool_call_arguments(call: dict[str, Any]) -> dict[str, Any]:
-    function = call.get("function") if isinstance(call.get("function"), dict) else {}
-    arguments = function.get("arguments", call.get("arguments", {}))
-    if isinstance(arguments, str):
-        import json
-
-        try:
-            parsed = json.loads(arguments or "{}")
-        except json.JSONDecodeError:
-            parsed = {"raw": arguments}
-        return parsed if isinstance(parsed, dict) else {"value": parsed}
-    return arguments if isinstance(arguments, dict) else {}
 
 
 async def _reconcile(

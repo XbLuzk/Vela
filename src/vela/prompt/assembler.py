@@ -6,6 +6,7 @@ from pathlib import Path
 from vela.branding import PRODUCT_NAME
 from vela.config import VelaConfig
 from vela.memory import MemoryManager
+from vela.trust import DEFAULT_PROJECT_INSTRUCTION_PATHS
 
 
 class PromptAssembler:
@@ -84,14 +85,11 @@ class PromptAssembler:
         return "\n".join(parts)
 
     def _static_project_instructions(self) -> str:
-        paths = [
-            Path(self.cwd) / "AGENTS.md",
-            Path(self.cwd) / ".vela" / "AGENTS.md",
-            Path(self.cwd) / "PAI.md",
-            Path(self.cwd) / ".vela" / "PAI.md",
-            Path(self.cwd) / "PAI.local.md",
-            Path(self.cwd) / ".vela" / "PAI.local.md",
-        ]
+        paths = (
+            [Path(self.cwd) / relative for relative in DEFAULT_PROJECT_INSTRUCTION_PATHS]
+            if self.config.project_trusted
+            else []
+        )
         for configured in self.config.prompt.custom_prompt_paths:
             candidate = Path(configured).expanduser()
             paths.append(candidate if candidate.is_absolute() else Path(self.cwd) / candidate)

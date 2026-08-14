@@ -9,15 +9,22 @@ from typer.testing import CliRunner
 from vela.agent import Agent
 from vela.config import load_config
 from vela.entrypoints import cli
-from vela.eval import EvalRunner, compare_results, load_suite, write_result
-from vela.eval.models import CaseResult, EvalCase, SuiteResult
+from vela.eval import (
+    EvalRunner,
+    compare_results,
+    load_builtin_suite,
+    load_result,
+    load_suite,
+    write_result,
+)
+from vela.eval.models import CaseResult, EvalAssertion, EvalCase, EvalSuite, SuiteResult
 from vela.tools import ToolRegistry, get_builtin_tools
 
 
 class WritingClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 4_000
+    max_context_window = 20_000
 
     def __init__(self) -> None:
         self.calls = 0
@@ -139,6 +146,171 @@ def test_compare_results_identifies_regressions_and_improvements() -> None:
     assert comparison["total_tokens_delta"] == 4
 
 
+def test_builtin_suite_is_packaged_and_loadable() -> None:
+    suite = load_builtin_suite()
+
+    assert suite.name == "coding-smoke"
+    assert len(suite.cases) == 3
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        {"type": "response_contains", "value": ""},
+        {"type": "file_contains", "path": "answer.txt", "value": ""},
+        {"type": "file_exists", "path": ""},
+        {"type": "command_succeeds", "command": [""]},
+    ],
+)
+def test_load_suite_rejects_empty_assertion_inputs(tmp_path, assertion) -> None:
+    suite_path = tmp_path / "suite.json"
+    suite_path.write_text(
+        json.dumps(
+            {
+                "name": "invalid",
+                "cases": [{"id": "case", "prompt": "work", "assertions": [assertion]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_suite(suite_path)
+
+
+def test_compare_results_rejects_different_suite_or_case_sets() -> None:
+    baseline = _result(passed={"case-a": True, "case-b": True}, tokens=10).to_dict()
+    different_suite = {**baseline, "suite": "other"}
+    removed_case = _result(passed={"case-a": True}, tokens=10).to_dict()
+
+    with pytest.raises(ValueError, match="suites differ"):
+        compare_results(baseline, different_suite)
+    with pytest.raises(ValueError, match="case sets differ"):
+        compare_results(baseline, removed_case)
+
+
+def test_eval_runner_isolates_factory_and_assertion_failures(tmp_path) -> None:
+    suite = EvalSuite(
+        name="isolation",
+        cases=(
+            EvalCase(
+                id="factory-fails",
+                prompt="work",
+                assertions=(EvalAssertion(type="file_exists", path="missing.txt"),),
+            ),
+            EvalCase(
+                id="assertion-fails",
+                prompt="work",
+                assertions=(EvalAssertion(type="file_exists", path="../outside.txt"),),
+            ),
+        ),
+    )
+
+    async def factory(workspace, case):
+        if case.id == "factory-fails":
+            raise RuntimeError("provider unavailable")
+        config = load_config(project_root=workspace)
+        config.llm.api_key = "test"
+        config.features.context_compression = False
+        return Agent(
+            llm_client=WritingClient(),
+            tool_registry=ToolRegistry(),
+            config=config,
+            cwd=str(workspace),
+        )
+
+    result = asyncio.run(EvalRunner(factory, tmp_path / "work").run(suite))
+
+    assert [case.id for case in result.cases] == ["factory-fails", "assertion-fails"]
+    assert result.cases[0].error == "RuntimeError"
+    assert not result.cases[1].assertions[0].passed
+    assert result.success_rate == 0
+
+
+def test_eval_runner_contains_fixture_setup_failure_and_continues(tmp_path) -> None:
+    suite = EvalSuite(
+        name="fixture-isolation",
+        cases=(
+            EvalCase(
+                id="conflicting-fixtures",
+                prompt="work",
+                files={"a": "file", "a/nested.txt": "cannot create"},
+                assertions=(EvalAssertion(type="file_exists", path="a"),),
+            ),
+            EvalCase(
+                id="later-case",
+                prompt="work",
+                assertions=(EvalAssertion(type="response_contains", value="finished"),),
+            ),
+        ),
+    )
+
+    async def factory(workspace, case):  # noqa: ARG001
+        config = load_config(project_root=workspace)
+        config.llm.api_key = "test"
+        config.features.context_compression = False
+        return Agent(
+            llm_client=WritingClient(),
+            tool_registry=ToolRegistry(),
+            config=config,
+            cwd=str(workspace),
+        )
+
+    result = asyncio.run(EvalRunner(factory, tmp_path / "work").run(suite))
+
+    assert [case.id for case in result.cases] == ["conflicting-fixtures", "later-case"]
+    assert result.cases[0].error == "FileExistsError"
+    assert result.cases[1].error is None
+    assert result.cases[1].passed
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"suite": "smoke", "cases": []},
+        {
+            "suite": "smoke",
+            "success_rate": 1.0,
+            "total_tokens": 1,
+            "duration_p50_ms": 1,
+            "duration_p95_ms": 1,
+            "cases": [],
+        },
+        {
+            "suite": "smoke",
+            "success_rate": "one",
+            "total_tokens": 1,
+            "duration_p50_ms": 1,
+            "duration_p95_ms": 1,
+            "cases": [{"id": "case", "passed": True}],
+        },
+        {
+            "suite": "smoke",
+            "success_rate": 1.0,
+            "total_tokens": 1,
+            "duration_p50_ms": 1,
+            "duration_p95_ms": 1,
+            "cases": [{}],
+        },
+        {
+            "suite": "smoke",
+            "success_rate": 1.0,
+            "total_tokens": 1,
+            "duration_p50_ms": 1,
+            "duration_p95_ms": 1,
+            "cases": [{"id": "case", "passed": "yes"}],
+        },
+    ],
+)
+def test_load_result_normalizes_malformed_result_shapes_to_value_error(tmp_path, payload) -> None:
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_result(path)
+
+
 def test_eval_compare_command_fails_when_a_case_regresses(tmp_path) -> None:
     baseline = tmp_path / "baseline.json"
     current = tmp_path / "current.json"
@@ -149,6 +321,17 @@ def test_eval_compare_command_fails_when_a_case_regresses(tmp_path) -> None:
 
     assert result.exit_code == 1
     assert json.loads(result.stdout)["regressions"] == ["case-a"]
+
+
+def test_eval_run_requires_explicit_trust_for_custom_suite(tmp_path, monkeypatch) -> None:
+    suite = tmp_path / "suite.json"
+    suite.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("VELA_API_KEY", "test")
+
+    result = CliRunner().invoke(cli.app, ["eval", "run", str(suite), "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 2
+    assert "--allow-code-execution" in result.output
 
 
 def _result(*, passed: dict[str, bool], tokens: int) -> SuiteResult:

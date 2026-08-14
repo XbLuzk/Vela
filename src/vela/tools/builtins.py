@@ -462,7 +462,10 @@ async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolR
 async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     if not context.config.features.skill:
         return ToolResult("Skills are disabled.", is_error=True)
-    skill = SkillRegistry(context.cwd).load(str(payload["name"]))
+    skill = SkillRegistry(
+        context.cwd,
+        include_project=context.config.project_trusted,
+    ).load(str(payload["name"]))
     if not skill:
         return ToolResult(f'Skill "{payload["name"]}" not found.', is_error=True)
     content = skill.body or skill.content

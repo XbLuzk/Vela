@@ -13,6 +13,7 @@ from rich.console import Console
 from vela.config import load_config
 from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
+    MessageDeliveryController,
     PermissionModeController,
     bottom_toolbar,
     input_border_float,
@@ -198,6 +199,29 @@ def test_ctrl_v_capture_does_not_block_prompt_event_loop(tmp_path):
 
     assert event_loop_advanced
     assert result == f"@image:<{image_path}> "
+
+
+def test_alt_enter_marks_message_as_follow_up(tmp_path):
+    permission = PermissionModeController(load_config(project_root=tmp_path))
+    delivery = MessageDeliveryController()
+
+    async def run_prompt() -> str:
+        with create_pipe_input() as pipe_input:
+            session = PromptSession(
+                input=pipe_input,
+                output=DummyOutput(),
+                key_bindings=permission_key_bindings(
+                    permission,
+                    message_delivery=delivery,
+                ),
+            )
+            pipe_input.send_text("next task\x1b\r")
+            return await session.prompt_async()
+
+    result = asyncio.run(run_prompt())
+
+    assert result == "next task"
+    assert delivery.consume() == "follow_up"
 
 
 def test_shift_tab_input_toggles_live_permission_mode(tmp_path):

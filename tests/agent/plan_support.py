@@ -10,7 +10,7 @@ from vela.tools.base import Tool, ToolResult, object_schema
 class FakeClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
 
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
         yield {"type": "text_delta", "text": "{}"}

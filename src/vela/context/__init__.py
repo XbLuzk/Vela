@@ -1,6 +1,7 @@
 from vela.context.manager import (
     ContextBudget,
     ContextEngine,
+    ContextOverflowError,
     ContextResult,
     estimate_message_tokens,
     estimate_text_tokens,
@@ -9,6 +10,7 @@ from vela.context.manager import (
 __all__ = [
     "ContextBudget",
     "ContextEngine",
+    "ContextOverflowError",
     "ContextResult",
     "estimate_message_tokens",
     "estimate_text_tokens",

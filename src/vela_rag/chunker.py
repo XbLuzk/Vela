@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -56,14 +57,29 @@ _MAX_FILE_BYTES = 1024 * 1024
 
 def discover_source_files(root: Path) -> Iterator[Path]:
     """Yield supported text files below root in stable order."""
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or any(part in _EXCLUDED_DIRS for part in path.parts):
-            continue
-        if path.name not in _SPECIAL_FILES and path.suffix.lower() not in _EXTENSIONS:
-            continue
-        if path.name.endswith((".min.js", ".lock")) or path.stat().st_size > _MAX_FILE_BYTES:
-            continue
-        yield path
+    resolved_root = root.resolve()
+    for directory, directory_names, file_names in os.walk(resolved_root, followlinks=False):
+        directory_path = Path(directory)
+        directory_names[:] = sorted(
+            name
+            for name in directory_names
+            if name not in _EXCLUDED_DIRS and not (directory_path / name).is_symlink()
+        )
+        for name in sorted(file_names):
+            path = directory_path / name
+            if path.is_symlink():
+                continue
+            if path.name not in _SPECIAL_FILES and path.suffix.lower() not in _EXTENSIONS:
+                continue
+            try:
+                resolved = path.resolve()
+                if not resolved.is_relative_to(resolved_root):
+                    continue
+                if name.endswith((".min.js", ".lock")) or resolved.stat().st_size > _MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
+            yield resolved
 
 
 def chunk_file(path: Path, root: Path, *, lines_per_chunk: int = 80) -> list[CodeChunk]:

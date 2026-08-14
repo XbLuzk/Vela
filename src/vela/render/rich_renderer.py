@@ -145,6 +145,8 @@ class RichRenderer:
             title = "Assistant Output" if stop_reason == "tool_use" else "Final Output"
             self._flush_thinking()
             self._flush_markdown(title=title)
+        elif event_type == "steering_applied":
+            self.console.print(Text("Steering message applied", style="dim"))
         elif event_type == "tool_call":
             self._flush_thinking()
             self._flush_markdown(title="Assistant Output")

@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from vela.run_trace.context import current_run_id
+
 SENSITIVE_KEYS = ("token", "key", "password", "secret", "authorization", "bearer")
 
 
@@ -24,6 +26,7 @@ class AuditLog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         event = {
             "timestamp": datetime.now(UTC).isoformat(),
+            "run_id": current_run_id(),
             "tool_name": tool_name,
             "input": self._redact(input_data),
             "outcome": outcome,

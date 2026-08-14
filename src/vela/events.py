@@ -26,6 +26,7 @@ AgentEventType = Literal[
     "plan_task_started",
     "run_finished",
     "run_started",
+    "steering_applied",
     "text_delta",
     "thinking_delta",
     "tool_call",
@@ -114,6 +115,7 @@ class AgentEvent(_AgentEventBase, total=False):
     summarized_messages: int
     truncated_tool_results: int
     omitted_tool_characters: int
+    recovered_from_overflow: bool
     interrupt: dict[str, Any]
     pending_tasks: int
     task_id: str

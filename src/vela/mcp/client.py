@@ -17,9 +17,12 @@ from vela.tools.base import Tool, ToolContext, ToolResult, object_schema
 
 
 class McpClientManager:
-    def __init__(self, project_root: str | Path):
+    def __init__(self, project_root: str | Path, *, include_project: bool = True):
         self.project_root = str(Path(project_root).resolve())
-        self.specs = load_mcp_server_specs(self.project_root)
+        self.specs = load_mcp_server_specs(
+            self.project_root,
+            include_project=include_project,
+        )
         self.last_errors: dict[str, str] = {}
 
     async def load_tools(self) -> list[Tool]:

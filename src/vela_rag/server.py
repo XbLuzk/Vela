@@ -22,18 +22,24 @@ def create_server(root: Path, database: Path | None = None) -> FastMCP:
     server = FastMCP("Vela Code RAG", log_level="ERROR")
 
     @server.tool()
-    def index_repository() -> dict[str, str | int]:
+    def index_repository() -> dict[str, object]:
         """Incrementally index supported source and documentation files."""
-        return index.rebuild().to_dict()
+        result: dict[str, object] = index.rebuild().to_dict()
+        if index.last_warning:
+            result["warning"] = index.last_warning
+        return result
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def search_code(query: str, limit: int = 8) -> dict[str, object]:
         """Search indexed code and return content with file and line references."""
         safe_limit = min(max(limit, 1), 20)
-        return {
+        result: dict[str, object] = {
             "query": query,
             "results": [hit.to_dict() for hit in index.search(query, limit=safe_limit)],
         }
+        if index.last_warning:
+            result["warning"] = index.last_warning
+        return result
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def rag_status() -> dict[str, str | int]:

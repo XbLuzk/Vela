@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ from vela.entrypoints.repl_commands import handle_context_command, handle_settin
 from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
     BorderedPromptSession,
+    MessageDeliveryController,
     PermissionModeController,
     permission_key_bindings,
     prompt_message,
@@ -38,6 +39,7 @@ from vela.session import ActiveSession, finalize_interrupted_history
 from vela.skill import SkillRegistry
 from vela.task_control import InteractiveTaskController, TaskState
 from vela.tools import ToolRegistry
+from vela.trust import ProjectTrustStore
 from vela.types import Message
 
 SLASH_COMMANDS = [
@@ -61,6 +63,7 @@ SLASH_COMMANDS = [
     "/trace",
     "/skill",
     "/mcp",
+    "/trust",
 ]
 
 INTERACTIVE_HELP = """\
@@ -69,6 +72,8 @@ Task controls
   Esc                   Cancel the current task
   Ctrl+C                Cancel once; press again while cancelling to exit Vela
   Ctrl+V                Save a macOS clipboard image and insert an @image reference
+  Enter                 Queue steering input while a ReAct task is running
+  Alt+Enter             Queue a follow-up after the current task finishes
 
 Plan review
   execute               Confirm the displayed Plan
@@ -83,6 +88,10 @@ Sessions
 Runs
   /trace                List recent Agent runs
   /trace <id|number>    Inspect one persisted run summary
+
+Project trust
+  /trust                Trust project config, MCP, and Skills after restart
+  /trust deny           Revoke project trust after restart
 
 Other commands
   {commands}
@@ -102,6 +111,7 @@ class ReplRuntime:
     renderer: RichRenderer
     active_session: ActiveSession
     task_controller: InteractiveTaskController
+    message_delivery: MessageDeliveryController = field(default_factory=MessageDeliveryController)
 
 
 # Startup ---------------------------------------------------------------------
@@ -114,7 +124,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
     client = create_llm_client(config.llm)
     tool_count = len(registry.list_names())
     mcp_server_count = _count_mcp_servers(mcp_manager)
-    skill_count = len(SkillRegistry(cwd).list())
+    skill_count = len(SkillRegistry(cwd, include_project=config.project_trusted).list())
     agents_file_count = _count_named_files(cwd, "AGENTS.md")
     renderer = RichRenderer(context_window=client.max_context_window)
     renderer.banner(
@@ -124,12 +134,14 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
     task_controller = InteractiveTaskController(
         on_error=lambda exc: console.print(f"[red]Task failed:[/red] {exc}")
     )
+    message_delivery = MessageDeliveryController()
     agent = Agent(
         llm_client=client,
         tool_registry=registry,
         cwd=cwd,
         config=config,
         plan_review_callback=task_controller.request_plan_review,
+        steering_callback=task_controller.take_steering_message,
         approval_callback=lambda request: _approval_prompt(
             request,
             console,
@@ -172,12 +184,35 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         key_bindings=permission_key_bindings(
             permission_mode,
             task_controller,
+            message_delivery=message_delivery,
             console=console,
         ),
     )
+
+    def refresh_prompt() -> None:
+        if task_controller.state in {TaskState.CANCELLED, TaskState.FAILED}:
+            pending = task_controller.take_pending_messages()
+            if pending:
+                restored = "\n\n".join(pending)
+                buffer = session.default_buffer
+                separator = "\n\n" if buffer.text and restored else ""
+                buffer.text = f"{buffer.text}{separator}{restored}"
+                buffer.cursor_position = len(buffer.text)
+        session.app.invalidate()
+
     task_controller.set_callbacks(
-        on_change=session.app.invalidate,
+        on_change=refresh_prompt,
         on_error=lambda exc: console.print(f"[red]Task failed:[/red] {exc}"),
+    )
+    task_controller.set_follow_up_runner(
+        lambda message: _run_agent_with_session(
+            agent,
+            renderer,
+            message,
+            active_session,
+            console,
+            task_controller,
+        )
     )
     runtime = ReplRuntime(
         console=console,
@@ -189,6 +224,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         renderer=renderer,
         active_session=active_session,
         task_controller=task_controller,
+        message_delivery=message_delivery,
     )
 
     with patch_stdout(raw=True):
@@ -227,6 +263,7 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
             _print_session_warning(console, active_session)
             console.print()
             return
+        delivery = runtime.message_delivery.consume()
         message = user_input.strip()
         if not message:
             continue
@@ -243,7 +280,11 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
             console.print(task_controller.submit_plan_review(message))
             continue
         if task_controller.active:
-            console.print("[yellow]当前任务仍在运行；使用 /cancel、Esc 或 Ctrl+C 取消。[/yellow]")
+            queued_as = task_controller.queue_message(message, delivery=delivery)
+            if queued_as == "steering":
+                console.print("[dim]已排队：当前轮次的工具完成后送入 Agent。[/dim]")
+            else:
+                console.print("[dim]已排队：当前任务完成后继续执行。[/dim]")
             continue
         if message.startswith("/"):
             should_exit = await _handle_slash(message, runtime)
@@ -358,6 +399,8 @@ async def _handle_slash(raw: str, runtime: ReplRuntime) -> bool:
         handle_context_command(command, arg, runtime)
     elif command == "/plan":
         _handle_plan_command(arg, runtime)
+    elif command == "/trust":
+        _handle_trust_command(arg, runtime)
     elif command in {
         "/config",
         "/tools",
@@ -408,6 +451,21 @@ def _handle_plan_command(arg: str, runtime: ReplRuntime) -> None:
     _start_plan(arg, runtime)
 
 
+def _handle_trust_command(arg: str, runtime: ReplRuntime) -> None:
+    normalized = arg.strip().lower()
+    if normalized not in {"", "allow", "trust", "deny", "revoke"}:
+        runtime.console.print("[red]Usage:[/red] /trust [deny]")
+        return
+    trusted = normalized not in {"deny", "revoke"}
+    try:
+        ProjectTrustStore().set(runtime.cwd, trusted)
+    except OSError as exc:
+        runtime.console.print(f"[red]Project trust could not be saved:[/red] {exc}")
+        return
+    state = "trusted" if trusted else "untrusted"
+    runtime.console.print(f"Project marked {state}. Restart Vela to reload project resources.")
+
+
 def _start_plan(arg: str, runtime: ReplRuntime) -> None:
     resume_graph = arg in {"--resume", "resume", "继续"}
     plan_agent = LangGraphPlanAgent(
@@ -428,7 +486,12 @@ def _start_plan(arg: str, runtime: ReplRuntime) -> None:
         runtime.console,
         runtime.task_controller,
     )
-    runtime.task_controller.start(run, initial_state=TaskState.PLANNING, label=arg)
+    runtime.task_controller.start(
+        run,
+        initial_state=TaskState.PLANNING,
+        label=arg,
+        accepts_steering=False,
+    )
 
 
 # Slash command helpers -------------------------------------------------------

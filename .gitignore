@@ -8,5 +8,6 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+eval-results/
 .vela/
 /.playwright-cli

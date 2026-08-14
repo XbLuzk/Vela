@@ -3,19 +3,28 @@
 from __future__ import annotations
 
 import json
+import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 
 from vela.agent import Agent
 from vela.config import VelaConfig
-from vela.eval import EvalCase, EvalRunner, compare_results, load_result, load_suite, write_result
+from vela.eval import (
+    EvalCase,
+    EvalRunner,
+    compare_results,
+    load_builtin_suite,
+    load_result,
+    load_suite,
+    write_result,
+)
 from vela.llm import create_llm_client
 from vela.tools import ToolRegistry, get_builtin_tools
 
 
 async def run_eval_suite(
-    suite_path: Path,
+    suite_path: Path | None,
     *,
     project_root: Path,
     config: VelaConfig,
@@ -23,8 +32,8 @@ async def run_eval_suite(
     workspace_root: Path | None = None,
 ) -> tuple[Path, dict[str, object]]:
     """Run a suite with production Agent code and isolated built-in tools."""
-    suite = load_suite(suite_path)
-    run_key = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    suite = load_suite(suite_path) if suite_path else load_builtin_suite()
+    run_key = f"{datetime.now(UTC):%Y%m%d-%H%M%S-%f}-{uuid.uuid4().hex[:8]}"
     workspaces = workspace_root or project_root / ".vela" / "eval-work" / run_key
 
     async def create_agent(workspace: Path, case: EvalCase) -> Agent:
@@ -44,7 +53,10 @@ async def run_eval_suite(
         )
 
     result = await EvalRunner(create_agent, workspaces).run(suite)
-    target = output or project_root / "eval-results" / f"{suite.name}-{run_key}.json"
+    suite_filename = "".join(
+        character if character.isalnum() or character in "-_" else "_" for character in suite.name
+    )
+    target = output or project_root / "eval-results" / f"{suite_filename}-{run_key}.json"
     write_result(result, target)
     return target, result.to_dict()
 

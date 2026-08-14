@@ -39,6 +39,22 @@ REPL_STYLE_RULES = {
 }
 
 PermissionMode = Literal["default", "auto"]
+MessageDelivery = Literal["steering", "follow_up"]
+
+
+@dataclass(slots=True)
+class MessageDeliveryController:
+    """Remember which submit shortcut produced the next prompt value."""
+
+    _next: MessageDelivery = "steering"
+
+    def mark(self, delivery: MessageDelivery) -> None:
+        self._next = delivery
+
+    def consume(self) -> MessageDelivery:
+        delivery = self._next
+        self._next = "steering"
+        return delivery
 
 
 @dataclass
@@ -86,6 +102,7 @@ def permission_key_bindings(
     permission_mode: PermissionModeController,
     task_controller: InteractiveTaskController | None = None,
     *,
+    message_delivery: MessageDeliveryController | None = None,
     console: Console | None = None,
     clipboard_grabber: Callable[[], ClipboardImageResult] = grab_clipboard_image,
 ) -> KeyBindings:
@@ -128,6 +145,17 @@ def permission_key_bindings(
         if clipboard_jobs:
             await asyncio.gather(*tuple(clipboard_jobs), return_exceptions=True)
         if not event.app.is_done:
+            if message_delivery is not None:
+                message_delivery.mark("steering")
+            event.app.current_buffer.validate_and_handle()
+
+    @bindings.add(Keys.Escape, Keys.Enter)
+    async def submit_follow_up(event) -> None:
+        if clipboard_jobs:
+            await asyncio.gather(*tuple(clipboard_jobs), return_exceptions=True)
+        if not event.app.is_done:
+            if message_delivery is not None:
+                message_delivery.mark("follow_up")
             event.app.current_buffer.validate_and_handle()
 
     return bindings

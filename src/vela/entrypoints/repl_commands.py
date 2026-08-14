@@ -132,7 +132,10 @@ def _handle_hitl(arg: str, runtime: ReplRuntime) -> None:
 
 
 def _handle_skill(arg: str, runtime: ReplRuntime) -> None:
-    registry = SkillRegistry(runtime.cwd)
+    registry = SkillRegistry(
+        runtime.cwd,
+        include_project=runtime.config.project_trusted,
+    )
     sub, _, rest = arg.partition(" ")
     if sub == "show" and rest:
         skill = registry.load(rest.strip())

@@ -26,6 +26,24 @@ def test_skill_registry_layers_are_read_only(tmp_path, monkeypatch):
     assert registry.load("web-access").source == "user"
 
 
+def test_untrusted_skill_registry_ignores_project_skills(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    builtin = tmp_path / "builtin"
+    user = tmp_path / "user"
+    project = tmp_path / "project"
+    _write_skill(user, "user-skill", "user desc", "v1")
+    _write_skill(project / ".vela" / "skills", "project-skill", "project desc", "v1")
+
+    registry = SkillRegistry(
+        project,
+        builtin_root=builtin,
+        user_root=user,
+        include_project=False,
+    )
+
+    assert [skill.name for skill in registry.list()] == ["user-skill"]
+
+
 def test_skill_context_buffer_is_one_shot_and_capped():
     buffer = SkillContextBuffer(limit=3)
     buffer.push("a", "A")

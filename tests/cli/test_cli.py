@@ -5,6 +5,7 @@ import json
 from typer.testing import CliRunner
 
 from vela.entrypoints import cli
+from vela.prompt import PromptAssembler
 from vela.run_trace import RunTrace, RunTraceStore
 from vela.types import Usage
 
@@ -93,3 +94,53 @@ def test_trace_json_keeps_warning_on_stderr(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert json.loads(result.stdout) == []
     assert "could not be read" in result.stderr
+
+
+def test_trace_json_not_found_keeps_machine_readable_stdout(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    result = CliRunner().invoke(cli.app, ["trace", "missing", "--json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) is None
+    assert "not found" in result.stderr
+
+
+def test_noninteractive_project_resources_are_ignored_until_explicitly_trusted(
+    tmp_path,
+    monkeypatch,
+):
+    project = tmp_path / "project"
+    (project / ".vela").mkdir(parents=True)
+    (project / ".vela" / "config.json").write_text(
+        json.dumps({"llm": {"model": "project-model"}}),
+        encoding="utf-8",
+    )
+    (project / "AGENTS.md").write_text("untrusted instruction", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("VELA_API_KEY", "test")
+    seen: list[tuple[str, bool, str]] = []
+
+    async def fake_run_prompt(prompt, cwd, config, **kwargs):  # noqa: ARG001
+        static = PromptAssembler(config, cwd, [], "model", "provider").build_static()
+        seen.append((config.llm.model, config.project_trusted, static))
+
+    monkeypatch.setattr(cli, "_run_prompt", fake_run_prompt)
+
+    denied = CliRunner().invoke(
+        cli.app,
+        ["--prompt", "hello", "--cwd", str(project)],
+    )
+    trusted = CliRunner().invoke(
+        cli.app,
+        ["--trust-project", "--prompt", "hello", "--cwd", str(project)],
+    )
+
+    assert denied.exit_code == 0
+    assert trusted.exit_code == 0
+    assert [(model, trusted) for model, trusted, _ in seen] == [
+        ("deepseek-v4-flash", False),
+        ("project-model", True),
+    ]
+    assert "untrusted instruction" not in seen[0][2]
+    assert "untrusted instruction" in seen[1][2]

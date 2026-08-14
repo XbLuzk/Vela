@@ -94,12 +94,15 @@ class VelaConfig:
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
+    project_trusted: bool = True
 
 
 def load_config(
     project_root: str | Path | None = None,
     overrides: dict[str, Any] | None = None,
     env: dict[str, str | None] | None = None,
+    *,
+    include_project: bool = True,
 ) -> VelaConfig:
     env_map = env if env is not None else os.environ
     data = _config_to_dict(VelaConfig())
@@ -109,7 +112,7 @@ def load_config(
         data = _deep_merge(data, user_config)
 
     root = Path(project_root).resolve() if project_root else None
-    if root:
+    if root and include_project:
         project_config = _read_json(root / ".vela" / "config.json")
         if project_config:
             data = _deep_merge(data, project_config)
@@ -122,15 +125,20 @@ def load_config(
 
     data = _apply_env(data, env_map)
     config = _dict_to_config(data)
+    config.project_trusted = include_project
     config.memory.long_term_db_path = _expand_home(config.memory.long_term_db_path)
     config.policy.audit_log_path = _expand_home(config.policy.audit_log_path)
     config.tools.execution_journal_path = _expand_home(config.tools.execution_journal_path)
     return config
 
 
-def get_config_paths(project_root: str | Path | None = None) -> list[Path]:
+def get_config_paths(
+    project_root: str | Path | None = None,
+    *,
+    include_project: bool = True,
+) -> list[Path]:
     paths = [_home() / ".vela" / "config.json"]
-    if project_root:
+    if project_root and include_project:
         paths.append(Path(project_root).resolve() / ".vela" / "config.json")
     return paths
 
@@ -253,7 +261,9 @@ def _deep_merge(target: dict[str, Any], source: dict[str, Any]) -> dict[str, Any
 
 
 def _config_to_dict(config: VelaConfig) -> dict[str, Any]:
-    return asdict(config)
+    data = asdict(config)
+    data.pop("project_trusted", None)
+    return data
 
 
 def _dict_to_config(data: dict[str, Any]) -> VelaConfig:

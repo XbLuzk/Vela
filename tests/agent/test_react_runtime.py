@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from vela.agent import Agent
 from vela.agent.react_runtime import run_react_agent
 from vela.config import load_config
+from vela.context import ContextOverflowError
 from vela.tools import ToolRegistry, get_builtin_tools
 from vela.tools.base import Tool, ToolResult, object_schema
 from vela.types import Message
@@ -16,7 +18,7 @@ from vela.types import Message
 class FakeClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
 
     def __init__(self):
         self.calls = 0
@@ -51,7 +53,7 @@ class FakeClient:
 class SkillLoadingClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
 
     def __init__(self):
         self.calls = 0
@@ -85,7 +87,7 @@ class SkillLoadingClient:
 class UsageAndCompressionClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 800
+    max_context_window = 2_000
 
     def __init__(self):
         self.saw_summary = False
@@ -110,7 +112,7 @@ class UsageAndCompressionClient:
 class SingleTurnStreamingClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
     api_key = "must-not-be-serialized"
 
     def __init__(self):
@@ -130,7 +132,7 @@ class SingleTurnStreamingClient:
 class ParallelReadClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
 
     def __init__(self):
         self.calls = 0
@@ -157,7 +159,7 @@ class ParallelReadClient:
 class DuplicateToolIdClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
 
     def __init__(self):
         self.calls = 0
@@ -190,7 +192,7 @@ class DuplicateToolIdClient:
 class ToolResultClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
 
     def __init__(self, name: str, arguments: str = "{}", expected_result: str = ""):
         self.name = name
@@ -221,7 +223,7 @@ class ToolResultClient:
 class IncompleteToolClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
 
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
         yield {
@@ -238,7 +240,7 @@ class IncompleteToolClient:
 class AmbiguousFragmentClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 1000
+    max_context_window = 20_000
 
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
         for index, name in enumerate(("write_a", "write_b")):
@@ -576,7 +578,7 @@ def test_closing_after_first_tool_result_cancels_pending_concurrent_tool(tmp_pat
     class TwoReadClient:
         model_name = "fake-model"
         provider_name = "fake-provider"
-        max_context_window = 1_000
+        max_context_window = 20_000
 
         async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
             for index, name in enumerate(("fast_read", "slow_read")):
@@ -693,6 +695,42 @@ def test_react_runtime_forwards_hitl_approval(
             "description": "write",
         }
     ]
+
+
+def test_mutating_tool_audit_is_correlated_with_agent_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = load_config(project_root=tmp_path)
+    config.llm.api_key = "test-key"
+    config.features.context_compression = False
+    config.policy.hitl_mode = "never"
+    config.policy.audit_log_path = str(tmp_path / "audit.jsonl")
+
+    async def write(_payload, _context):
+        return ToolResult("written")
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="write",
+            description="write",
+            parameters=object_schema({}),
+            handler=write,
+            is_read_only=False,
+        )
+    )
+    agent = Agent(
+        llm_client=ToolResultClient("write", expected_result="written"),
+        tool_registry=registry,
+        config=config,
+        cwd=str(tmp_path),
+    )
+
+    events = asyncio.run(_collect(agent.run("write once")))
+    audit = json.loads((tmp_path / "audit.jsonl").read_text(encoding="utf-8"))
+
+    assert audit["run_id"] == events[0]["run_id"]
+    assert audit["tool_name"] == "write"
+    assert audit["outcome"] == "allow"
 
 
 def test_unknown_tool_with_malformed_input_returns_error_and_model_recovers(tmp_path, monkeypatch):
@@ -976,3 +1014,175 @@ def test_react_loop_rejects_non_positive_turn_limits(tmp_path, monkeypatch, max_
         )
 
     assert client.calls == 0
+
+
+def test_steering_message_is_applied_after_current_tool_round(tmp_path, monkeypatch):
+    class SteeringClient:
+        model_name = "fake-model"
+        provider_name = "fake-provider"
+        max_context_window = 20_000
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+            self.calls += 1
+            if self.calls == 1:
+                yield {
+                    "type": "tool_call_delta",
+                    "tool_call": {
+                        "index": 0,
+                        "id": "read_1",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path":"note.txt"}',
+                        },
+                    },
+                }
+                yield {"type": "message_end", "stop_reason": "tool_use"}
+                return
+            assert messages[-2].role == "tool"
+            assert messages[-1].role == "user"
+            assert messages[-1].content == "change direction"
+            yield {"type": "text_delta", "text": "adjusted"}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "note.txt").write_text("hello", encoding="utf-8")
+    config = load_config(project_root=tmp_path)
+    config.llm.api_key = "test-key"
+    config.features.context_compression = False
+    config.features.skill = False
+    pending = ["change direction"]
+    agent = Agent(
+        llm_client=SteeringClient(),
+        tool_registry=_builtin_registry(),
+        config=config,
+        cwd=str(tmp_path),
+        steering_callback=lambda: pending.pop(0) if pending else None,
+    )
+
+    events = asyncio.run(_collect(agent.run("read the note")))
+
+    event_types = [event["type"] for event in events]
+    assert event_types.index("tool_result") < event_types.index("steering_applied")
+    assert event_types.count("turn_started") == 2
+    assert agent.history[-1].content == "adjusted"
+
+
+def test_context_overflow_compacts_and_retries_the_same_model_turn(tmp_path, monkeypatch):
+    class OverflowOnceClient:
+        model_name = "fake-model"
+        provider_name = "fake-provider"
+        max_context_window = 20_000
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+            self.calls += 1
+            if self.calls == 1:
+                yield {"type": "error", "error": ContextOverflowError("provider overflow")}
+                return
+            assert all(message.content != "old request" for message in messages)
+            assert messages[-1].content == "current request"
+            yield {"type": "text_delta", "text": "recovered"}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = load_config(project_root=tmp_path)
+    config.llm.api_key = "test-key"
+    config.features.skill = False
+    client = OverflowOnceClient()
+    agent = Agent(
+        llm_client=client,
+        tool_registry=ToolRegistry(),
+        config=config,
+        cwd=str(tmp_path),
+    )
+    agent.history = [
+        Message(role="user", content="old request"),
+        Message(role="assistant", content="old answer"),
+    ]
+
+    events = asyncio.run(_collect(agent.run("current request")))
+
+    recovery = next(
+        event
+        for event in events
+        if event["type"] == "context_compressed" and event.get("recovered_from_overflow")
+    )
+    assert recovery["after_tokens"] < recovery["before_tokens"]
+    assert [event["type"] for event in events].count("turn_started") == 1
+    assert client.calls == 2
+    assert not any(event["type"] == "error" for event in events)
+
+
+def test_context_overflow_is_retried_only_once_per_model_turn(tmp_path, monkeypatch):
+    class OverflowTwiceClient:
+        model_name = "fake-model"
+        provider_name = "fake-provider"
+        max_context_window = 20_000
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+            self.calls += 1
+            yield {"type": "error", "error": ContextOverflowError("provider overflow")}
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = load_config(project_root=tmp_path)
+    config.llm.api_key = "test-key"
+    config.features.skill = False
+    client = OverflowTwiceClient()
+    agent = Agent(
+        llm_client=client,
+        tool_registry=ToolRegistry(),
+        config=config,
+        cwd=str(tmp_path),
+    )
+    agent.history = [
+        Message(role="user", content="old request"),
+        Message(role="assistant", content="old answer"),
+    ]
+
+    events = asyncio.run(_collect(agent.run("current request")))
+
+    assert client.calls == 2
+    assert [event["type"] for event in events].count("error") == 1
+    assert not any(event["type"] == "done" for event in events)
+    assert not any(event["type"] == "tool_call" for event in events)
+
+
+def test_context_overflow_without_an_old_complete_turn_fails_without_tools(tmp_path, monkeypatch):
+    class OverflowClient:
+        model_name = "fake-model"
+        provider_name = "fake-provider"
+        max_context_window = 20_000
+
+        async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+            yield {"type": "error", "error": ContextOverflowError("provider overflow")}
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = load_config(project_root=tmp_path)
+    config.llm.api_key = "test-key"
+    config.features.skill = False
+    agent = Agent(
+        llm_client=OverflowClient(),
+        tool_registry=ToolRegistry(),
+        config=config,
+        cwd=str(tmp_path),
+    )
+
+    events = asyncio.run(_collect(agent.run("current request")))
+
+    assert [event["type"] for event in events].count("error") == 1
+    assert not any(event["type"] == "done" for event in events)
+    assert not any(event["type"] in {"tool_call", "tool_result"} for event in events)
+
+
+def _builtin_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register_all(get_builtin_tools())
+    return registry

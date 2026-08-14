@@ -11,7 +11,7 @@
 2. `src/vela/entrypoints/repl.py::start_repl`：组装模型、工具、Agent 和 Session。
 3. `src/vela/entrypoints/repl.py::_repl_loop`：读取用户输入并启动当前任务。
 4. `src/vela/agent/agent.py::Agent.run`：根据 `react / plan` 选择执行方式。
-5. `src/vela/run_trace.py::RunTracker.stream`：为请求增加 Run ID，并统一收尾完成、失败和取消。
+5. `src/vela/run_trace/tracker.py::RunTracker.stream`：增加 Run ID、分层 Span，并统一收尾。
 6. `src/vela/agent/react_runtime.py::run_react_agent`：执行“模型回复 → 工具调用 → 工具结果 → 再次回复”。
 
 先忽略界面样式、MCP、Memory 和恢复逻辑。能解释这六步，就已经理解了项目最核心的运行链路。
@@ -25,6 +25,10 @@
 3. 没有工具调用就结束；有工具调用就进入 `_execute_tool_round()`。
 4. `ToolExecutor` 负责并发只读工具、串行写工具、HITL 和工具 Journal。
 5. 工具结果写回消息历史，下一轮模型调用继续处理。
+
+运行中输入的 steering 由 `src/vela/task_control.py::InteractiveTaskController` 暂存；ReAct 只在一次
+模型回复和工具调用都结束后取一条，避免改写正在执行的轮次。显式 follow-up 则在前一请求完成后串行
+启动，不会创建并发 Agent。
 
 这条普通 ReAct 链路不依赖高层 Agent 框架，因此可以直接看到循环条件、消息变化和异常出口。
 
@@ -54,12 +58,23 @@
 - `src/vela/session.py`：保存和恢复对话消息。
 - `src/vela/tools/journal.py`：记录有副作用的工具调用，恢复时避免重复执行已完成操作。
 - `src/vela/task_control.py`：管理 planning、running、cancelled 等前台任务状态。
-- `src/vela/run_trace.py`：聚合一次请求的终态、耗时、Token 和工具摘要，并追加写入 JSONL。
+- `src/vela/run_trace/models.py`：定义 Run 和 Span 的可序列化结构。
+- `src/vela/run_trace/tracker.py`：把 Agent 事件归入 Plan、Turn 和 Tool 父子 Span。
+- `src/vela/run_trace/store.py`：以 JSONL 追加保存 Trace，并提供倒序和 Run ID 查询。
+- `src/vela/run_trace/context.py`：只在拉取 Agent 工作时绑定当前 Run ID，供工具 Audit 自动关联。
 - `src/vela/entrypoints/repl_commands.py`：实现配置、上下文、Memory、Skill 等斜杠命令。
 - `src/vela/entrypoints/repl_ui.py`：输入框、快捷键和底部状态栏；它不参与 Agent 决策。
 - `src/vela/render/rich_renderer.py`：把 Agent 事件显示到终端。
 
-## 5. 推荐阅读节奏
+## 5. 独立能力怎么读
+
+- `src/vela/context/manager.py::ContextEngine.prepare`：计算输入预算、裁剪工具结果并压缩历史。
+- `src/vela/context/manager.py::ContextEngine.recover_from_overflow`：Provider 拒绝上下文后再缩减一次旧轮次。
+- `src/vela_rag/server.py`：只负责暴露三个 MCP Tool；索引实现位于 `src/vela_rag/index.py`。
+- `src/vela/eval/runner.py::EvalRunner.run`：在隔离目录运行固定任务并执行确定性断言。
+- `src/vela/trust.py`：记录项目 Trust；CLI 在加载项目配置、MCP 和 Skills 前先解析这项决定。
+
+## 6. 推荐阅读节奏
 
 每次只读 10 到 20 行，并回答三个问题：
 

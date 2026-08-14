@@ -95,12 +95,14 @@ class SkillRegistry:
         *,
         builtin_root: str | Path | None = None,
         user_root: str | Path | None = None,
+        include_project: bool = True,
     ):
         self.project_root = Path(project_root).resolve()
         package_root = Path(__file__).resolve().parents[1]
         self.builtin_root = Path(builtin_root or package_root / "builtin_skills")
         self.user_root = Path(user_root or Path.home() / ".vela" / "skills")
         self.project_skill_root = self.project_root / ".vela" / "skills"
+        self.include_project = include_project
         self._skills: dict[str, Skill] | None = None
 
     def list(self) -> list[Skill]:
@@ -117,11 +119,13 @@ class SkillRegistry:
         if self._skills is not None:
             return self._skills
         skills: dict[str, Skill] = {}
-        for source, root in [
+        roots = [
             ("builtin", self.builtin_root),
             ("user", self.user_root),
-            ("project", self.project_skill_root),
-        ]:
+        ]
+        if self.include_project:
+            roots.append(("project", self.project_skill_root))
+        for source, root in roots:
             if not root.exists():
                 continue
             for skill_file in sorted(root.glob("*/SKILL.md")):

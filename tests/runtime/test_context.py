@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from vela.context import ContextBudget, ContextEngine, estimate_text_tokens
+import pytest
+
+from vela.context import ContextBudget, ContextEngine, ContextOverflowError, estimate_text_tokens
 from vela.types import Message
 
 
@@ -137,3 +139,62 @@ def test_context_summary_surfaces_goals_decisions_files_and_unfinished_work():
 
 def test_mixed_language_token_estimator_is_nonzero_and_conservative():
     assert estimate_text_tokens("你好 world()") >= 5
+
+
+def test_message_limit_alone_compacts_complete_old_turns():
+    messages = [
+        message
+        for index in range(6)
+        for message in (
+            Message(role="user", content=f"request {index}"),
+            Message(role="assistant", content=f"answer {index}"),
+        )
+    ]
+    engine = ContextEngine(ContextBudget(100_000, 1_000), max_history_messages=5)
+
+    result = engine.prepare(messages)
+
+    assert result.compressed
+    assert len(result.messages) <= 5
+    assert "conversation-summary" in str(result.messages[0].content)
+    assert result.messages[-2].content == "request 5"
+
+
+def test_context_never_returns_more_than_available_input_budget():
+    messages = [
+        Message(role="user", content=f"old request {index} " + "x" * 400) for index in range(6)
+    ]
+    engine = ContextEngine(ContextBudget(700, 120, 0.8, 0.5, 50), min_recent_messages=1)
+
+    result = engine.prepare(messages, system_prompt="system")
+
+    assert result.estimated_tokens_after <= engine.budget.available_input_tokens
+
+
+def test_context_fails_explicitly_when_latest_request_cannot_fit():
+    engine = ContextEngine(ContextBudget(300, 100, reserve_tokens=50))
+
+    with pytest.raises(ContextOverflowError, match="exceed the model input budget"):
+        engine.prepare([Message(role="user", content="x" * 2_000)], system_prompt="system")
+
+
+def test_overflow_recovery_removes_an_old_complete_turn():
+    messages = [
+        Message(role="user", content="old request"),
+        Message(role="assistant", content="old answer"),
+        Message(role="user", content="current request"),
+    ]
+    engine = ContextEngine(ContextBudget(10_000, 1_000))
+
+    result = engine.recover_from_overflow(messages, system_prompt="system")
+
+    assert result.compressed
+    assert [message.content for message in result.messages] == ["current request"]
+    assert result.estimated_tokens_after < result.estimated_tokens_before
+
+
+def test_overflow_recovery_does_not_truncate_the_only_user_request():
+    engine = ContextEngine(ContextBudget(10_000, 1_000))
+
+    with pytest.raises(ContextOverflowError, match="no older complete turn"):
+        engine.recover_from_overflow([Message(role="user", content="only request")])

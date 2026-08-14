@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  Vela ReAct · LangGraph Plan · MCP · Skills · Memory · Multimodal
+  Vela ReAct · LangGraph Plan · Context Engine · Trace · Eval · MCP
 </p>
 
 <p align="center">
@@ -42,9 +42,11 @@ ReAct 请求的六步主链路，再逐步进入 Plan、Session 和终端 UI。
 | Agent 运行时 | 显式 Vela ReAct 循环与可恢复的 LangGraph Plan-and-Execute |
 | 任务恢复 | 项目级持久化 Session、任务取消、Graph Checkpoint 和工具结果重放 |
 | 工具系统 | 文件、Shell、代码搜索、记忆、Skill 和 MCP 扩展工具 |
-| 安全控制 | HITL 人工确认、路径与命令策略、JSONL 审计日志和会话级权限切换 |
-| 运行追踪 | 每次 ReAct/Plan 请求都有 Run ID、终态、耗时、Token 与工具摘要 |
-| 上下文管理 | 静态项目指令、SQLite 长期记忆、相关性召回、Token 预算和上下文压缩 |
+| 安全控制 | 项目信任、HITL、路径与命令策略、JSONL 审计和会话级权限切换 |
+| 运行追踪 | Run → Plan Node → Model Turn → Tool Call 分层 Trace，并用 Run ID 关联工具审计 |
+| 上下文管理 | 有界 Context Engine、结构化摘要、Token 预算和 Provider 溢出恢复 |
+| 代码检索 | 独立 Code RAG MCP，支持增量 SQLite 索引、文件行号引用和可选混合检索 |
+| Agent 评测 | 固定任务集、确定性断言、成功率/耗时/Token 指标和版本差异报告 |
 | 多模态输入 | 支持本地图片、远程图片、`@image` 引用和 macOS 剪贴板图片 |
 | 使用方式 | 交互式 CLI 和单次 Prompt |
 
@@ -109,6 +111,11 @@ Vela 按以下顺序合并配置，后面的配置覆盖前面的配置：
 5. CLI 参数
 6. 当前进程环境变量
 
+项目存在 `.env`、`.vela/config.json`、`.vela/mcp.json`、默认项目指令文件（如 `AGENTS.md`）或项目级
+Skill 时，Vela 首次交互启动会先询问是否信任。未信任项目不会加载这些可改变模型、工具、凭证或
+系统指令的资源；单次模式默认拒绝，可以用
+`--trust-project` 仅授权本次运行。交互中使用 `/trust` 或 `/trust deny` 保存决定，重启后生效。
+
 常用环境变量：
 
 | 环境变量 | 用途 |
@@ -155,11 +162,16 @@ uv run vela -p "解释这个仓库"
 Shell 工具。第一次 `Ctrl+C` 取消当前任务，再按一次才退出 Vela。取消或失败的对话仍会保存，
 之后可以通过 `/resume` 继续。
 
+ReAct 运行期间仍可输入新消息：`Enter` 将消息作为 steering，在当前模型/工具轮次结束后的安全边界
+送入同一任务；`Alt+Enter` 将消息作为 follow-up，在当前任务完成后串行执行。Plan 不接受中途改写，
+运行中的普通输入会自动转为 follow-up。取消或失败时，尚未送达的消息会回到输入框。
+
 ### Run Trace
 
 每次 ReAct 或 Plan 请求都会生成稳定的 `run_<id>`，并在完成、失败或取消时写入
-`~/.vela/runs.jsonl`。Trace 记录终态、模型、模式、耗时、Token、工具调用/错误/重放计数和关联
-Session，不保存用户 Prompt、工具入参或工具结果。
+`~/.vela/runs.jsonl`。Trace 以请求为根节点，继续记录 Plan Node、Model Turn 和 Tool Call 的父子
+关系、耗时与终态，并汇总 Token、工具调用/错误/重放计数和关联 Session。它不保存用户 Prompt、
+工具入参或工具结果。有副作用工具的 Audit 记录带同一个 Run ID，因此可以从 Trace 定位到实际副作用。
 
 ```text
 /trace
@@ -228,6 +240,7 @@ Session，不保存用户 Prompt、工具入参或工具结果。
 /skill list
 /skill show <name>
 /mcp
+/trust [deny]
 ```
 
 </details>
@@ -247,6 +260,7 @@ Vela 内置的主要工具：
 联网与浏览器能力统一由 MCP Server 提供，Vela 不再维护一套重复的本地 Web 实现。
 
 写文件、执行命令和远程 MCP 写操作等危险动作会经过 Policy、HITL 和 Audit 处理。
+项目级配置、MCP 和 Skill 还必须先通过项目 Trust；用户级资源不受项目 Trust 影响。
 
 交互模式下按 `Shift+Tab` 切换权限：
 
@@ -280,6 +294,7 @@ Skill 按以下顺序加载，同名时后层覆盖前层：
 
 Vela 先根据名称、描述和标签召回 Top-K 候选，再由模型决定是否调用 `load_skill`。Skill 正文只在
 真正加载后进入当前任务。Vela 只读取已有 `SKILL.md`，不会通过模型创建或改写 Skill。
+项目级 Skill 只有在项目被信任后才参与发现与加载。
 
 ### Memory
 
@@ -290,7 +305,10 @@ Vela 先根据名称、描述和标签召回 Top-K 候选，再由模型决定�
 | 动态长期记忆 | 按项目隔离的 SQLite 记录，支持去重、TTL、容量治理和相关性召回 |
 
 动态记忆按当前问题召回相关 Top-K，模型也可以调用 `search_memory` 深搜。达到输入预算的 80% 时，
-Vela 会压缩旧轮次并保留近期消息和完整的 Tool Call/Result 对。压缩摘要不会自动写入长期记忆。
+Vela 的 Context Engine 会先裁剪过长工具结果，再按 Token 预算压缩旧轮次，并保留近期消息和完整的
+Tool Call/Result 对。结构化摘要优先保留目标、文件、决策和未完成事项，且不会自动写入长期记忆。
+如果 Provider 仍报告上下文超限，Vela 会再执行一次更严格的旧轮次压缩并重试当前模型轮次；如果最新
+请求本身已经无法放入窗口，则明确失败，不会无限重试。
 
 ## 图片输入
 
@@ -328,6 +346,21 @@ uv run vela mcp init-chrome --scope project
 uv run vela mcp list
 ```
 
+初始化项目级 Code RAG MCP，并在首次使用时建立增量索引：
+
+```bash
+uv run vela mcp init-rag --cwd .
+uv run vela
+# 对话中让 Agent 调用 mcp__code-rag__index_repository，再调用 search_code
+```
+
+Code RAG 默认使用本地 SQLite FTS 检索，不增加模型调用。需要语义混合检索时，在
+`.vela/mcp.json` 的 `code-rag.env` 中显式配置
+`VELA_RAG_EMBEDDING_API_KEY`、`VELA_RAG_EMBEDDING_MODEL`，以及可选的
+`VELA_RAG_EMBEDDING_BASE_URL`。凭证只传给该 MCP 进程，但索引的源码片段和搜索文本会发送给所选
+Embedding Provider；敏感仓库应保持默认本地词法检索。Embedding 不可用时会带警告退回词法检索。
+`.vela/` 已被默认忽略，不要把包含凭证的 MCP 配置提交到 Git。
+
 连接已经开启 remote debugging 的 Chrome：
 
 ```bash
@@ -338,6 +371,20 @@ uv run vela mcp init-chrome \
 
 授权 Chrome DevTools MCP 前，请确认浏览器中没有不应暴露给 Agent 的个人账号、敏感数据或生产
 后台页面。
+
+## Agent 评测
+
+仓库内置三项小型编码任务，用同一套断言比较不同模型或代码版本：
+
+```bash
+uv run vela eval run
+uv run vela eval compare eval-results/baseline.json eval-results/current.json
+```
+
+每个 Case 在隔离工作区中调用真实 `Agent → ReAct → ToolExecutor` 链路。结果 JSON 记录逐题成功与
+失败、断言、工具次数、Token，以及 P50/P95 耗时；`eval compare` 会列出明确的回归与改进任务。
+默认评测只启用内置工具，避免外部 MCP 状态影响可重复性。
+自定义 Suite 可以驱动 Agent 和断言命令，审查文件后必须显式增加 `--allow-code-execution`。
 
 ## 开发与验证
 

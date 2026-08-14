@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import stat
+
 from vela_rag.index import CodeIndex
 
 
@@ -94,3 +96,78 @@ def test_index_skips_generated_and_private_runtime_directories(tmp_path) -> None
     assert stats.files == 1
     assert index.search("secret") == []
     assert index.search("vendor") == []
+
+
+def test_index_does_not_follow_file_or_directory_symlinks(tmp_path) -> None:
+    repository = tmp_path / "repository"
+    outside = tmp_path / "outside"
+    repository.mkdir()
+    outside.mkdir()
+    (repository / "main.py").write_text("SAFE_MARKER = True\n", encoding="utf-8")
+    (outside / "secret.py").write_text("OUTSIDE_SECRET = True\n", encoding="utf-8")
+    (repository / "linked.py").symlink_to(outside / "secret.py")
+    (repository / "linked-dir").symlink_to(outside, target_is_directory=True)
+
+    index = CodeIndex(repository, tmp_path / "index.sqlite")
+    stats = index.rebuild()
+
+    assert stats.files == 1
+    assert index.search("OUTSIDE_SECRET") == []
+
+
+def test_repository_root_named_like_excluded_directory_is_still_indexed(tmp_path) -> None:
+    repository = tmp_path / "node_modules"
+    repository.mkdir()
+    (repository / "main.py").write_text("ROOT_SOURCE = True\n", encoding="utf-8")
+
+    index = CodeIndex(repository, tmp_path / "index.sqlite")
+
+    assert index.rebuild().files == 1
+
+
+def test_embedding_outage_falls_back_to_lexical_index_and_search(tmp_path) -> None:
+    class BrokenEmbedder:
+        identity = "broken"
+
+        def embed(self, texts):  # noqa: ARG002
+            raise OSError("offline")
+
+    (tmp_path / "service.py").write_text("def recover_session(): return True\n", encoding="utf-8")
+    index = CodeIndex(tmp_path, tmp_path / "index.sqlite", embedder=BrokenEmbedder())
+
+    stats = index.rebuild()
+    hits = index.search("recover_session")
+
+    assert stats.files == 1
+    assert hits[0].path == "service.py"
+    assert "unavailable" in str(index.last_warning)
+
+
+def test_rebuild_batches_embeddings_across_changed_files(tmp_path) -> None:
+    class CountingEmbedder(FakeEmbedder):
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def embed(self, texts):
+            self.calls.append(texts)
+            return super().embed(texts)
+
+    for index in range(3):
+        (tmp_path / f"service_{index}.py").write_text(
+            f"def service_{index}(): return 'payment'\n",
+            encoding="utf-8",
+        )
+    embedder = CountingEmbedder()
+
+    CodeIndex(tmp_path, tmp_path / "index.sqlite", embedder=embedder).rebuild()
+
+    assert len(embedder.calls) == 1
+    assert len(embedder.calls[0]) == 3
+
+
+def test_index_database_is_private_to_the_current_user(tmp_path) -> None:
+    database = tmp_path / "data" / "index.sqlite"
+    CodeIndex(tmp_path, database)
+
+    assert stat.S_IMODE(database.stat().st_mode) == 0o600
+    assert stat.S_IMODE(database.parent.stat().st_mode) == 0o700

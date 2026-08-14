@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from vela.config import VelaConfig
-from vela.context import ContextBudget, ContextEngine
+from vela.context import ContextBudget, ContextEngine, ContextOverflowError, ContextResult
 from vela.events import AgentEvent
 from vela.image import parse_image_references
 from vela.llm.base import LlmClient
 from vela.prompt import PromptAssembler
 from vela.skill import SkillContextBuffer, SkillRegistry
 from vela.tools.base import ToolContext, ToolDecision, ToolResult
+from vela.tools.calls import tool_call_arguments, tool_call_name
 from vela.tools.executor import ToolExecutor
 from vela.tools.registry import ToolRegistry
 from vela.types import Message, Usage
@@ -30,6 +30,7 @@ class _ModelTurn:
     usage: Usage = field(default_factory=Usage)
     tool_fragments: dict[int, dict[str, Any]] = field(default_factory=dict)
     failed: bool = False
+    error: BaseException | None = None
 
     def tool_calls(self) -> list[dict[str, Any]]:
         return _complete_tool_calls(self.tool_fragments)
@@ -50,6 +51,7 @@ async def run_react_agent(
     skill_context_buffer: SkillContextBuffer | None = None,
     tool_execution_scope: str | None = None,
     allow_uncertain_tool_retry: bool = False,
+    steering_callback: Callable[[], str | None] | None = None,
     max_turns: int = 20,
 ) -> AsyncIterator[AgentEvent]:
     """Run one request and update a supplied ``history`` transcript in place.
@@ -93,6 +95,7 @@ async def run_react_agent(
     completed_turns = 0
     try:
         for turn_number in range(1, max_turns + 1):
+            overflow_retried = False
             compression_event = _compress_context(
                 transcript,
                 context_engine=context_engine,
@@ -105,20 +108,42 @@ async def run_react_agent(
 
             yield {"type": "turn_started", "turn": turn_number}
 
-            model_turn = _ModelTurn()
-            model_stream = _stream_model_turn(
-                llm_client,
-                transcript,
-                tool_definitions,
-                effective_system_prompt,
-                model_turn,
-            )
-            try:
-                async for event in model_stream:
-                    yield event
-            finally:
-                await model_stream.aclose()
-            if model_turn.failed:
+            while True:
+                model_turn = _ModelTurn()
+                model_stream = _stream_model_turn(
+                    llm_client,
+                    transcript,
+                    tool_definitions,
+                    effective_system_prompt,
+                    model_turn,
+                )
+                try:
+                    async for event in model_stream:
+                        yield event
+                finally:
+                    await model_stream.aclose()
+                if not model_turn.failed:
+                    break
+                error = model_turn.error or RuntimeError("Model request failed")
+                if (
+                    isinstance(error, ContextOverflowError)
+                    and config.features.context_compression
+                    and not overflow_retried
+                ):
+                    try:
+                        recovered = context_engine.recover_from_overflow(
+                            transcript,
+                            system_prompt=effective_system_prompt,
+                            tool_definitions=tool_definitions,
+                        )
+                    except ContextOverflowError as recovery_error:
+                        yield {"type": "error", "error": recovery_error}
+                        return
+                    transcript[:] = recovered.messages
+                    overflow_retried = True
+                    yield _context_compressed_event(recovered, recovered_from_overflow=True)
+                    continue
+                yield {"type": "error", "error": error}
                 return
 
             completed_turns = turn_number
@@ -135,34 +160,42 @@ async def run_react_agent(
                 "stop_reason": model_turn.stop_reason,
             }
 
-            if not tool_calls:
-                yield {
-                    "type": "turn_complete",
-                    "turn": turn_number,
-                    "stop_reason": model_turn.stop_reason,
-                }
-                break
-            if turn_number == max_turns:
+            if tool_calls and turn_number == max_turns:
                 _close_skipped_tool_calls(transcript, tool_calls, max_turns)
                 raise RuntimeError(f"Agent reached the model turn limit ({max_turns}).")
-
-            tool_stream = _execute_tool_round(
-                tool_calls,
-                executor=tool_executor,
-                context=tool_context,
-                transcript=transcript,
-                skill_context_buffer=skill_context_buffer,
-            )
-            try:
-                async for event in tool_stream:
-                    yield event
-            finally:
-                await tool_stream.aclose()
+            if tool_calls:
+                tool_stream = _execute_tool_round(
+                    tool_calls,
+                    executor=tool_executor,
+                    context=tool_context,
+                    transcript=transcript,
+                    skill_context_buffer=skill_context_buffer,
+                )
+                try:
+                    async for event in tool_stream:
+                        yield event
+                finally:
+                    await tool_stream.aclose()
             yield {
                 "type": "turn_complete",
                 "turn": turn_number,
                 "stop_reason": model_turn.stop_reason,
             }
+            steering = (
+                steering_callback() if steering_callback and turn_number < max_turns else None
+            )
+            if steering:
+                _append_steering_message(
+                    transcript,
+                    steering,
+                    cwd=cwd,
+                    config=config,
+                    skill_context_buffer=skill_context_buffer,
+                )
+                yield {"type": "steering_applied"}
+                continue
+            if not tool_calls:
+                break
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - failures are part of the Agent event protocol
@@ -215,12 +248,7 @@ async def _stream_model_turn(
             elif event_type == "error":
                 error = event.get("error")
                 turn.failed = True
-                yield {
-                    "type": "error",
-                    "error": (
-                        error if isinstance(error, BaseException) else RuntimeError(str(error))
-                    ),
-                }
+                turn.error = error if isinstance(error, BaseException) else RuntimeError(str(error))
                 return
     finally:
         close = getattr(events, "aclose", None)
@@ -241,8 +269,8 @@ async def _execute_tool_round(
         yield {
             "type": "tool_call",
             "tool_call_id": str(call["id"]),
-            "name": _tool_name(call) or "unknown",
-            "input": _tool_input(call),
+            "name": tool_call_name(call) or "unknown",
+            "input": tool_call_arguments(call),
         }
 
     results = executor.execute_stream(tool_calls, context)
@@ -250,7 +278,7 @@ async def _execute_tool_round(
         async for result in results:
             call_id = str(result.tool_use_id or "")
             call = calls_by_id.get(call_id, {})
-            name = _tool_name(call) or "unknown"
+            name = tool_call_name(call) or "unknown"
             if name == "load_skill":
                 loaded_context = _drain_skill_context(skill_context_buffer)
                 if loaded_context:
@@ -303,7 +331,7 @@ def _complete_tool_calls(states: dict[int, dict[str, Any]]) -> list[dict[str, An
     used_ids: set[str] = set()
     for index in sorted(states):
         call = states[index]
-        if not _tool_name(call):
+        if not tool_call_name(call):
             continue
         call["id"] = _unique_tool_id(str(call.get("id") or f"tool_{index}"), used_ids)
         calls.append(call)
@@ -317,7 +345,7 @@ def _close_skipped_tool_calls(
 ) -> None:
     """Keep persisted provider history valid when the final turn asks for tools."""
     for call in tool_calls:
-        name = _tool_name(call) or "unknown"
+        name = tool_call_name(call) or "unknown"
         transcript.append(
             Message(
                 role="tool",
@@ -383,25 +411,6 @@ def _unique_tool_id(candidate: str, used_ids: set[str]) -> str:
     return unique
 
 
-def _tool_name(call: dict[str, Any]) -> str:
-    function = call.get("function")
-    if not isinstance(function, dict):
-        return ""
-    return str(function.get("name") or "")
-
-
-def _tool_input(call: dict[str, Any]) -> dict[str, Any]:
-    function = call.get("function")
-    raw = function.get("arguments") if isinstance(function, dict) else "{}"
-    if isinstance(raw, dict):
-        return raw
-    try:
-        parsed = json.loads(str(raw or "{}"))
-    except json.JSONDecodeError:
-        return {"raw": str(raw)}
-    return parsed if isinstance(parsed, dict) else {"value": parsed}
-
-
 def _tool_result_event(tool_call_id: str, name: str, result: ToolResult) -> AgentEvent:
     return {
         "type": "tool_result",
@@ -433,7 +442,15 @@ def _compress_context(
     transcript[:] = compression.messages
     if not compression.compressed:
         return None
-    return {
+    return _context_compressed_event(compression)
+
+
+def _context_compressed_event(
+    compression: ContextResult,
+    *,
+    recovered_from_overflow: bool = False,
+) -> AgentEvent:
+    event: AgentEvent = {
         "type": "context_compressed",
         "before_tokens": compression.estimated_tokens_before,
         "after_tokens": compression.estimated_tokens_after,
@@ -441,6 +458,9 @@ def _compress_context(
         "truncated_tool_results": compression.truncated_tool_results,
         "omitted_tool_characters": compression.omitted_tool_characters,
     }
+    if recovered_from_overflow:
+        event["recovered_from_overflow"] = True
+    return event
 
 
 def _build_system_prompt(
@@ -489,6 +509,19 @@ def _prepend_skill_context(
     return f"{loaded}\n\n---\nUser request:\n{user_message}"
 
 
+def _append_steering_message(
+    transcript: list[Message],
+    message: str,
+    *,
+    cwd: str,
+    config: VelaConfig,
+    skill_context_buffer: SkillContextBuffer | None,
+) -> None:
+    enriched = _prepend_skill_candidates(message, cwd, config)
+    enriched = _prepend_skill_context(enriched, skill_context_buffer)
+    transcript.append(Message(role="user", content=parse_image_references(enriched, cwd)))
+
+
 def _drain_skill_context(skill_context_buffer: SkillContextBuffer | None) -> str:
     if not skill_context_buffer or skill_context_buffer.is_empty():
         return ""
@@ -498,7 +531,10 @@ def _drain_skill_context(skill_context_buffer: SkillContextBuffer | None) -> str
 def _prepend_skill_candidates(user_message: str, cwd: str, config: VelaConfig) -> str:
     if not config.features.skill:
         return user_message
-    candidates = SkillRegistry(cwd).match(user_message, top_k=5)
+    candidates = SkillRegistry(cwd, include_project=config.project_trusted).match(
+        user_message,
+        top_k=5,
+    )
     if not candidates:
         return user_message
     lines = [

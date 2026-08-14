@@ -21,6 +21,7 @@ def test_stream_event_contracts_require_a_closed_type_discriminator() -> None:
         "plan_task_started",
         "run_finished",
         "run_started",
+        "steering_applied",
         "text_delta",
         "thinking_delta",
         "tool_call",

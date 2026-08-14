@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from vela.branding import USER_AGENT
+from vela.context import ContextOverflowError
 from vela.events import LlmEvent
 from vela.types import Message, Usage
 
@@ -67,6 +68,8 @@ class OpenAICompatibleClient:
                 httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
                 client.stream("POST", url, headers=headers, json=payload) as response,
             ):
+                if response.is_error:
+                    await response.aread()
                 response.raise_for_status()
                 async for event in _iter_sse(response):
                     if event == "[DONE]":
@@ -86,6 +89,15 @@ class OpenAICompatibleClient:
                 ),
             }
         except httpx.HTTPStatusError as exc:
+            if _is_context_overflow(exc.response):
+                yield {
+                    "type": "error",
+                    "error": ContextOverflowError(
+                        f"{self.provider_name} rejected the request because its context limit "
+                        "was exceeded."
+                    ),
+                }
+                return
             yield {
                 "type": "error",
                 "error": RuntimeError(
@@ -193,6 +205,21 @@ class OpenAICompatibleClient:
         usage = chunk.get("usage")
         if isinstance(usage, dict):
             yield {"type": "usage", "usage": Usage.from_mapping(usage).to_dict()}
+
+
+def _is_context_overflow(response: httpx.Response) -> bool:
+    if response.status_code not in {400, 413, 422}:
+        return False
+    text = response.text.lower()
+    markers = (
+        "context_length_exceeded",
+        "context length",
+        "context window",
+        "maximum context",
+        "prompt is too long",
+        "too many tokens",
+    )
+    return any(marker in text for marker in markers)
 
 
 async def _iter_sse(response: httpx.Response) -> AsyncIterator[str]:
