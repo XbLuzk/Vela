@@ -182,6 +182,7 @@ def _run_cli(
             "vela",
             "--cwd",
             str(workspace),
+            "--trust-project",
             "--mode",
             mode,
             "--json",
