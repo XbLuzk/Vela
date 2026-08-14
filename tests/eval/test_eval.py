@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from vela.agent import Agent
@@ -328,14 +329,14 @@ def test_eval_run_requires_explicit_trust_for_custom_suite(tmp_path, monkeypatch
     suite.write_text("{}", encoding="utf-8")
     monkeypatch.setenv("VELA_API_KEY", "test")
 
-    result = CliRunner().invoke(
-        cli.app,
-        ["eval", "run", str(suite), "--cwd", str(tmp_path)],
-        terminal_width=160,
-    )
-
-    assert result.exit_code == 2
-    assert "--allow-code-execution" in result.output
+    with pytest.raises(typer.BadParameter, match="--allow-code-execution"):
+        cli.eval_run(
+            suite=suite,
+            cwd=tmp_path,
+            output=None,
+            workspace=None,
+            allow_code_execution=False,
+        )
 
 
 def _result(*, passed: dict[str, bool], tokens: int) -> SuiteResult:
