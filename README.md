@@ -420,7 +420,4 @@ uv run vela -p hello
 
 ## 来源与许可
 
-Vela 基于 MIT 许可的软件 PaiCLI-Python 进行开发，并保留许可证要求的版权和许可声明。产品界面、
-命令、Python 包、配置目录和环境变量均使用 Vela 命名，不提供旧运行时命名的兼容入口。
-
 Vela 使用 [MIT License](LICENSE)。
