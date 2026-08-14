@@ -45,7 +45,7 @@ ReAct 请求的六步主链路，再逐步进入 Plan、Session 和终端 UI。
 | 安全控制 | 项目信任、HITL、路径与命令策略、JSONL 审计和会话级权限切换 |
 | 运行追踪 | Run → Plan Node → Model Turn → Tool Call 分层 Trace，并用 Run ID 关联工具审计 |
 | 上下文管理 | 有界 Context Engine、结构化摘要、Token 预算和 Provider 溢出恢复 |
-| 代码检索 | 独立 Code RAG MCP，支持增量 SQLite 索引、文件行号引用和可选混合检索 |
+| 代码检索 | 内置 Code RAG，支持自动增量 SQLite 索引、文件行号引用和可选混合检索 |
 | Agent 评测 | 固定任务集、确定性断言、成功率/耗时/Token 指标和版本差异报告 |
 | 多模态输入 | 支持本地图片、远程图片、`@image` 引用和 macOS 剪贴板图片 |
 | 使用方式 | 交互式 CLI 和单次 Prompt |
@@ -346,20 +346,18 @@ uv run vela mcp init-chrome --scope project
 uv run vela mcp list
 ```
 
-初始化项目级 Code RAG MCP，并在首次使用时建立增量索引：
+Code RAG 是可信项目的内置能力，不需要注册服务、修改 `mcp.json` 或单独启动进程。正常启动
+Vela 后即可使用；第一次搜索会自动建立索引，后续搜索会增量更新发生变化的文件：
 
 ```bash
-uv run vela mcp init-rag --cwd .
 uv run vela
-# 对话中让 Agent 调用 mcp__code-rag__index_repository，再调用 search_code
 ```
 
-Code RAG 默认使用本地 SQLite FTS 检索，不增加模型调用。需要语义混合检索时，在
-`.vela/mcp.json` 的 `code-rag.env` 中显式配置
-`VELA_RAG_EMBEDDING_API_KEY`、`VELA_RAG_EMBEDDING_MODEL`，以及可选的
-`VELA_RAG_EMBEDDING_BASE_URL`。凭证只传给该 MCP 进程，但索引的源码片段和搜索文本会发送给所选
-Embedding Provider；敏感仓库应保持默认本地词法检索。Embedding 不可用时会带警告退回词法检索。
-`.vela/` 已被默认忽略，不要把包含凭证的 MCP 配置提交到 Git。
+Code RAG 默认使用本地 SQLite FTS 检索，不增加模型调用。需要语义混合检索时，可以在启动 Vela
+前设置 `VELA_RAG_EMBEDDING_API_KEY`、`VELA_RAG_EMBEDDING_MODEL`，以及可选的
+`VELA_RAG_EMBEDDING_BASE_URL`。Vela 只把这三个变量传给内置 RAG 进程，但索引的源码片段和搜索
+文本会发送给所选 Embedding Provider；敏感仓库应保持默认本地词法检索。Embedding 不可用时会带
+警告退回词法检索。
 
 连接已经开启 remote debugging 的 Chrome：
 
