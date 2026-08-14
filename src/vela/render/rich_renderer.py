@@ -83,7 +83,7 @@ class RichRenderer:
     def banner(
         self,
         *,
-        version: str = "0.4.0",
+        version: str = "0.5.0",
         api_key_configured: bool = False,
     ) -> None:
         top = Table.grid(expand=True)

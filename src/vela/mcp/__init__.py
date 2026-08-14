@@ -3,7 +3,6 @@ from vela.mcp.config import (
     McpServerSpec,
     load_mcp_server_specs,
     write_chrome_devtools_config,
-    write_code_rag_config,
 )
 
 __all__ = [
@@ -11,5 +10,4 @@ __all__ = [
     "McpServerSpec",
     "load_mcp_server_specs",
     "write_chrome_devtools_config",
-    "write_code_rag_config",
 ]

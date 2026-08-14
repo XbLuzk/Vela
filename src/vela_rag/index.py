@@ -7,6 +7,7 @@ import json
 import math
 import re
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -17,6 +18,25 @@ from vela_rag.models import CodeChunk, IndexStats, SearchHit
 
 _TOKEN_PATTERN = re.compile(r"[\w.-]+", re.UNICODE)
 _RRF_K = 60
+
+
+@dataclass(frozen=True, slots=True)
+class _FileState:
+    digest: str
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    retrieval_identity: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingFile:
+    path: str
+    digest: str
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    chunks: list[CodeChunk]
 
 
 class CodeIndex:
@@ -49,28 +69,90 @@ class CodeIndex:
         relative_paths = {path.relative_to(self.root).as_posix() for path in files}
         with self._connect() as connection:
             known = {
-                str(row["path"]): str(row["digest"])
-                for row in connection.execute("SELECT path, digest FROM files")
+                str(row["path"]): _FileState(
+                    digest=str(row["digest"]),
+                    size=int(row["size"]),
+                    mtime_ns=int(row["mtime_ns"]),
+                    ctime_ns=int(row["ctime_ns"]),
+                    retrieval_identity=str(row["retrieval_identity"]),
+                )
+                for row in connection.execute(
+                    "SELECT path, digest, size, mtime_ns, ctime_ns, retrieval_identity FROM files"
+                )
             }
         removed = sorted(set(known) - relative_paths)
-        updates: list[tuple[str, str, list[CodeChunk]]] = []
+        updates: list[_PendingFile] = []
+        metadata_updates: list[tuple[int, int, int, str]] = []
+        retrieval_identity = self._retrieval_identity()
         for path in files:
             relative = path.relative_to(self.root).as_posix()
-            digest = self._index_digest(file_digest(path))
-            if known.get(relative) != digest:
-                updates.append((relative, digest, chunk_file(path, self.root)))
+            try:
+                metadata = path.stat()
+            except OSError:
+                self.last_warning = f"Skipped unreadable source: {relative}"
+                continue
+            cached = known.get(relative)
+            if cached and (
+                cached.size == metadata.st_size
+                and cached.mtime_ns == metadata.st_mtime_ns
+                and cached.ctime_ns == metadata.st_ctime_ns
+                and cached.retrieval_identity == retrieval_identity
+            ):
+                continue
+            try:
+                digest = file_digest(path)
+                chunks = chunk_file(path, self.root)
+            except OSError:
+                self.last_warning = f"Skipped unreadable source: {relative}"
+                continue
+            if (
+                not cached
+                or cached.digest != digest
+                or cached.retrieval_identity != retrieval_identity
+            ):
+                updates.append(
+                    _PendingFile(
+                        path=relative,
+                        digest=digest,
+                        size=metadata.st_size,
+                        mtime_ns=metadata.st_mtime_ns,
+                        ctime_ns=metadata.st_ctime_ns,
+                        chunks=chunks,
+                    )
+                )
+            else:
+                metadata_updates.append(
+                    (
+                        metadata.st_size,
+                        metadata.st_mtime_ns,
+                        metadata.st_ctime_ns,
+                        relative,
+                    )
+                )
 
-        all_chunks = [chunk for _, _, chunks in updates for chunk in chunks]
+        all_chunks = [chunk for update in updates for chunk in update.chunks]
         vectors = self._embed_chunks(all_chunks)
+        indexed_identity = retrieval_identity
+        if self.embedder and all_chunks and not any(vector is not None for vector in vectors):
+            indexed_identity = "embedding-incomplete"
         vectors_by_id = {
             chunk.chunk_id: vector for chunk, vector in zip(all_chunks, vectors, strict=True)
         }
         with self._connect() as connection:
             for relative in removed:
                 self._delete_file(connection, relative)
-            for relative, digest, chunks in updates:
-                embeddings = [vectors_by_id[chunk.chunk_id] for chunk in chunks]
-                self._replace_file(connection, relative, digest, chunks, embeddings)
+            connection.executemany(
+                "UPDATE files SET size = ?, mtime_ns = ?, ctime_ns = ? WHERE path = ?",
+                metadata_updates,
+            )
+            for update in updates:
+                embeddings = [vectors_by_id[chunk.chunk_id] for chunk in update.chunks]
+                self._replace_file(
+                    connection,
+                    update,
+                    indexed_identity,
+                    embeddings,
+                )
         return self.stats(updated_files=len(updates), removed_files=len(removed))
 
     def search(self, query: str, *, limit: int = 8) -> list[SearchHit]:
@@ -137,7 +219,11 @@ class CodeIndex:
                 """
                 CREATE TABLE IF NOT EXISTS files (
                     path TEXT PRIMARY KEY,
-                    digest TEXT NOT NULL
+                    digest TEXT NOT NULL,
+                    size INTEGER NOT NULL DEFAULT -1,
+                    mtime_ns INTEGER NOT NULL DEFAULT -1,
+                    ctime_ns INTEGER NOT NULL DEFAULT -1,
+                    retrieval_identity TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS chunks (
                     chunk_id TEXT PRIMARY KEY,
@@ -158,6 +244,28 @@ class CodeIndex:
                 );
                 """
             )
+            columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(files)")}
+            if {"size", "mtime_ns", "ctime_ns", "retrieval_identity"} - columns:
+                connection.execute("BEGIN IMMEDIATE")
+                columns = {
+                    str(row["name"]) for row in connection.execute("PRAGMA table_info(files)")
+                }
+                if "size" not in columns:
+                    connection.execute(
+                        "ALTER TABLE files ADD COLUMN size INTEGER NOT NULL DEFAULT -1"
+                    )
+                if "mtime_ns" not in columns:
+                    connection.execute(
+                        "ALTER TABLE files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT -1"
+                    )
+                if "ctime_ns" not in columns:
+                    connection.execute(
+                        "ALTER TABLE files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT -1"
+                    )
+                if "retrieval_identity" not in columns:
+                    connection.execute(
+                        "ALTER TABLE files ADD COLUMN retrieval_identity TEXT NOT NULL DEFAULT ''"
+                    )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database)
@@ -167,13 +275,12 @@ class CodeIndex:
     def _replace_file(
         self,
         connection: sqlite3.Connection,
-        relative: str,
-        digest: str,
-        chunks: list[CodeChunk],
+        update: _PendingFile,
+        retrieval_identity: str,
         embeddings: list[list[float] | None],
     ) -> None:
-        self._delete_file(connection, relative)
-        for chunk, embedding in zip(chunks, embeddings, strict=True):
+        self._delete_file(connection, update.path)
+        for chunk, embedding in zip(update.chunks, embeddings, strict=True):
             connection.execute(
                 "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -190,7 +297,18 @@ class CodeIndex:
                 "INSERT INTO chunks_fts(chunk_id, path, symbol, content) VALUES (?, ?, ?, ?)",
                 (chunk.chunk_id, chunk.path, chunk.symbol, chunk.content),
             )
-        connection.execute("INSERT INTO files(path, digest) VALUES (?, ?)", (relative, digest))
+        connection.execute(
+            "INSERT INTO files(path, digest, size, mtime_ns, ctime_ns, retrieval_identity) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                update.path,
+                update.digest,
+                update.size,
+                update.mtime_ns,
+                update.ctime_ns,
+                retrieval_identity,
+            ),
+        )
 
     def _delete_file(self, connection: sqlite3.Connection, relative: str) -> None:
         chunk_ids = [
@@ -221,10 +339,8 @@ class CodeIndex:
             return [None] * len(chunks)
         return embeddings
 
-    def _index_digest(self, content_digest: str) -> str:
-        retrieval_identity = self.embedder.identity if self.embedder else "lexical"
-        value = f"{content_digest}|{retrieval_identity}"
-        return hashlib.sha256(value.encode()).hexdigest()
+    def _retrieval_identity(self) -> str:
+        return self.embedder.identity if self.embedder else "lexical"
 
     def _lexical_ranking(self, connection: sqlite3.Connection, query: str) -> list[str]:
         terms = _TOKEN_PATTERN.findall(query)[:12]

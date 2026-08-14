@@ -86,7 +86,7 @@ def chunk_file(path: Path, root: Path, *, lines_per_chunk: int = 80) -> list[Cod
     """Split one UTF-8 source file and attach the nearest Python symbol."""
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+    except UnicodeError:
         return []
     lines = text.splitlines()
     if not lines:

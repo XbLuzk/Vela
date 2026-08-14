@@ -12,33 +12,28 @@ from vela_rag.embedding import embedding_client_from_env
 from vela_rag.index import CodeIndex, default_database
 
 
-def create_server(root: Path, database: Path | None = None) -> FastMCP:
+def create_server(root: Path) -> FastMCP:
     root = root.resolve()
     index = CodeIndex(
         root,
-        database or default_database(root),
+        default_database(root),
         embedder=embedding_client_from_env(),
     )
     server = FastMCP("Vela Code RAG", log_level="ERROR")
 
-    @server.tool()
-    def index_repository() -> dict[str, object]:
-        """Incrementally index supported source and documentation files."""
-        result: dict[str, object] = index.rebuild().to_dict()
-        if index.last_warning:
-            result["warning"] = index.last_warning
-        return result
-
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def search_code(query: str, limit: int = 8) -> dict[str, object]:
-        """Search indexed code and return content with file and line references."""
+        """Update the local index, then search code with file and line references."""
         safe_limit = min(max(limit, 1), 20)
+        index.rebuild()
+        rebuild_warning = index.last_warning
         result: dict[str, object] = {
             "query": query,
             "results": [hit.to_dict() for hit in index.search(query, limit=safe_limit)],
         }
-        if index.last_warning:
-            result["warning"] = index.last_warning
+        warning = index.last_warning or rebuild_warning
+        if warning:
+            result["warning"] = warning
         return result
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
@@ -52,9 +47,8 @@ def create_server(root: Path, database: Path | None = None) -> FastMCP:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Vela project-local Code RAG MCP server")
     parser.add_argument("--root", type=Path, required=True, help="Repository root")
-    parser.add_argument("--database", type=Path, help="Optional SQLite index path")
     args = parser.parse_args()
-    create_server(args.root, args.database).run(transport="stdio")
+    create_server(args.root).run(transport="stdio")
 
 
 if __name__ == "__main__":

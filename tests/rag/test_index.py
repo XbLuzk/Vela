@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
+import sqlite3
 import stat
 
+import vela_rag.index as index_module
 from vela_rag.index import CodeIndex
 
 
@@ -55,6 +58,47 @@ def test_code_index_updates_changed_files_and_removes_deleted_files(tmp_path) ->
     assert removed.removed_files == 1
     assert removed.files == 0
     assert removed.chunks == 0
+
+
+def test_unchanged_files_are_not_read_again_during_incremental_refresh(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "service.py").write_text("def stable(): return True\n", encoding="utf-8")
+    index = CodeIndex(tmp_path, tmp_path / "index.sqlite")
+    index.rebuild()
+
+    def unexpected_digest(_path):
+        raise AssertionError("unchanged source should not be read")
+
+    monkeypatch.setattr(index_module, "file_digest", unexpected_digest)
+
+    assert index.rebuild().updated_files == 0
+
+
+def test_same_size_file_with_restored_mtime_is_still_refreshed(tmp_path) -> None:
+    source = tmp_path / "service.py"
+    source.write_text("def old_name(): return 1\n", encoding="utf-8")
+    index = CodeIndex(tmp_path, tmp_path / "index.sqlite")
+    index.rebuild()
+    original = source.stat()
+
+    source.write_text("def new_name(): return 2\n", encoding="utf-8")
+    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    assert index.rebuild().updated_files == 1
+    assert index.search("new_name")[0].symbol == "new_name"
+
+
+def test_existing_index_schema_gains_incremental_metadata_columns(tmp_path) -> None:
+    database = tmp_path / "index.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE files (path TEXT PRIMARY KEY, digest TEXT NOT NULL)")
+    (tmp_path / "service.py").write_text("def migrated(): return True\n", encoding="utf-8")
+
+    index = CodeIndex(tmp_path, database)
+
+    assert index.rebuild().updated_files == 1
+    assert index.search("migrated")[0].path == "service.py"
 
 
 def test_hybrid_search_can_find_semantic_match_without_shared_terms(tmp_path) -> None:
@@ -141,6 +185,51 @@ def test_embedding_outage_falls_back_to_lexical_index_and_search(tmp_path) -> No
     assert stats.files == 1
     assert hits[0].path == "service.py"
     assert "unavailable" in str(index.last_warning)
+
+
+def test_embedding_outage_is_retried_on_the_next_rebuild(tmp_path) -> None:
+    class RecoveringEmbedder(FakeEmbedder):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def embed(self, texts):
+            self.calls += 1
+            if self.calls == 1:
+                raise OSError("offline")
+            return super().embed(texts)
+
+    (tmp_path / "billing.py").write_text(
+        "def charge_card(): return gateway.capture()\n", encoding="utf-8"
+    )
+    embedder = RecoveringEmbedder()
+    index = CodeIndex(tmp_path, tmp_path / "index.sqlite", embedder=embedder)
+
+    index.rebuild()
+    recovered = index.rebuild()
+
+    assert recovered.updated_files == 1
+    assert index.search("payment")[0].path == "billing.py"
+
+
+def test_unreadable_file_does_not_abort_refresh(tmp_path, monkeypatch) -> None:
+    broken = tmp_path / "broken.py"
+    broken.write_text("BROKEN = True\n", encoding="utf-8")
+    (tmp_path / "healthy.py").write_text("HEALTHY_MARKER = True\n", encoding="utf-8")
+    original_chunk_file = index_module.chunk_file
+
+    def sometimes_fails(path, root):
+        if path == broken:
+            raise OSError("file changed during indexing")
+        return original_chunk_file(path, root)
+
+    monkeypatch.setattr(index_module, "chunk_file", sometimes_fails)
+    index = CodeIndex(tmp_path, tmp_path / "index.sqlite")
+
+    stats = index.rebuild()
+
+    assert stats.files == 1
+    assert index.last_warning == "Skipped unreadable source: broken.py"
+    assert index.search("HEALTHY_MARKER")[0].path == "healthy.py"
 
 
 def test_rebuild_batches_embeddings_across_changed_files(tmp_path) -> None:

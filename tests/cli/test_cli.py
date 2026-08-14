@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 from vela.entrypoints import cli
 from vela.prompt import PromptAssembler
 from vela.run_trace import RunTrace, RunTraceStore
+from vela.trust import ProjectTrustStore
 from vela.types import Usage
 
 
@@ -144,3 +145,21 @@ def test_noninteractive_project_resources_are_ignored_until_explicitly_trusted(
     ]
     assert "untrusted instruction" not in seen[0][2]
     assert "untrusted instruction" in seen[1][2]
+
+
+def test_saved_trust_denial_is_respected_for_plain_project(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ProjectTrustStore().set(project, False)
+    seen: list[bool] = []
+
+    async def fake_start_repl(cwd, config, *, resume=False):  # noqa: ARG001
+        seen.append(config.project_trusted)
+
+    monkeypatch.setattr(cli, "start_repl", fake_start_repl)
+
+    result = CliRunner().invoke(cli.app, ["--cwd", str(project)])
+
+    assert result.exit_code == 0
+    assert seen == [False]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -23,6 +24,8 @@ class McpClientManager:
             self.project_root,
             include_project=include_project,
         )
+        if include_project:
+            self.specs["code-rag"] = _builtin_code_rag_spec(self.project_root)
         self.last_errors: dict[str, str] = {}
 
     async def load_tools(self) -> list[Tool]:
@@ -118,6 +121,7 @@ class McpClientManager:
                     is_concurrency_safe=False,
                     danger_level="safe" if read_only else "medium",
                     requires_approval=not read_only,
+                    timeout=spec.timeout,
                 )
             )
         return wrapped
@@ -138,6 +142,7 @@ class McpClientManager:
                 parameters=object_schema({}),
                 handler=list_handler,
                 is_read_only=True,
+                timeout=spec.timeout,
             ),
             Tool(
                 name=f"mcp__{spec.name}__read_resource",
@@ -149,6 +154,7 @@ class McpClientManager:
                 required_keys=["uri"],
                 handler=read_handler,
                 is_read_only=True,
+                timeout=spec.timeout,
             ),
         ]
 
@@ -175,6 +181,7 @@ class McpClientManager:
                 parameters=object_schema({}),
                 handler=list_handler,
                 is_read_only=True,
+                timeout=spec.timeout,
             ),
             Tool(
                 name=f"mcp__{spec.name}__get_prompt",
@@ -189,6 +196,7 @@ class McpClientManager:
                 required_keys=["name"],
                 handler=get_handler,
                 is_read_only=True,
+                timeout=spec.timeout,
             ),
         ]
 
@@ -245,6 +253,25 @@ def _content_to_text(content: Any) -> str:
     if hasattr(content, "model_dump"):
         return json.dumps(content.model_dump(mode="json"), ensure_ascii=False)
     return str(content)
+
+
+def _builtin_code_rag_spec(project_root: str) -> McpServerSpec:
+    embedding_env = {
+        key: os.environ[key]
+        for key in (
+            "VELA_RAG_EMBEDDING_API_KEY",
+            "VELA_RAG_EMBEDDING_BASE_URL",
+            "VELA_RAG_EMBEDDING_MODEL",
+        )
+        if os.environ.get(key)
+    }
+    return McpServerSpec(
+        name="code-rag",
+        command=sys.executable,
+        args=["-m", "vela_rag.server", "--root", project_root],
+        env=embedding_env,
+        timeout=300.0,
+    )
 
 
 def _stdio_environment(configured: dict[str, str]) -> dict[str, str]:

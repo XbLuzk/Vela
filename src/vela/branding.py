@@ -2,4 +2,4 @@
 
 PRODUCT_NAME = "Vela"
 CLI_NAME = "vela"
-USER_AGENT = "Vela/0.4.0"
+USER_AGENT = "Vela/0.5.0"

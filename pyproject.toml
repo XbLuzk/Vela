@@ -1,6 +1,6 @@
 [project]
 name = "vela-agent"
-version = "0.4.0"
+version = "0.5.0"
 description = "Vela terminal AI agent with an explicit ReAct loop, LangGraph planning, MCP, memory, and multimodal input"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,7 +23,6 @@ dependencies = [
 
 [project.scripts]
 vela = "vela.entrypoints.cli:app"
-vela-rag = "vela_rag.server:main"
 
 [project.optional-dependencies]
 dev = [

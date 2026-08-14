@@ -46,7 +46,7 @@ from vela.entrypoints.eval_command import (
 from vela.entrypoints.repl import start_repl
 from vela.entrypoints.trace_command import show_run_traces
 from vela.llm import create_llm_client
-from vela.mcp import load_mcp_server_specs, write_chrome_devtools_config, write_code_rag_config
+from vela.mcp import load_mcp_server_specs, write_chrome_devtools_config
 from vela.run_trace import RunTraceStore
 from vela.trust import (
     ProjectTrustStore,
@@ -81,12 +81,17 @@ def _resolve_cli_project_trust(
 ) -> bool:
     if override is not None:
         return override
+    trust_store = ProjectTrustStore()
+    saved = trust_store.get(root)
+    if saved is not None:
+        return saved
     if not has_trust_sensitive_resources(root):
         return True
     return resolve_project_trust(
         root,
         interactive=interactive,
         override=None,
+        store=trust_store,
         prompt=lambda path: typer.confirm(
             f"Trust project {path}? This enables its .env, Vela config, MCP servers, and Skills",
             default=False,
@@ -219,8 +224,7 @@ def doctor(
 ) -> None:
     """Inspect the system: Python, uv, Node, API key, and config."""
     root = (cwd or Path.cwd()).resolve()
-    saved_trust = ProjectTrustStore().get(root)
-    project_trusted = saved_trust is True or not has_trust_sensitive_resources(root)
+    project_trusted = _resolve_cli_project_trust(root, interactive=False, override=None)
     config = load_config(project_root=root, include_project=project_trusted)
     checks = {
         "python": sys.version.split()[0],
@@ -284,8 +288,7 @@ def eval_run(
 ) -> None:
     """Run fixed tasks and record success, latency, tokens, and tool calls."""
     root = (cwd or Path.cwd()).resolve()
-    saved_trust = ProjectTrustStore().get(root)
-    project_trusted = saved_trust is True or not has_trust_sensitive_resources(root)
+    project_trusted = _resolve_cli_project_trust(root, interactive=False, override=None)
     config = load_config(project_root=root, include_project=project_trusted)
     if not config.llm.api_key:
         raise typer.BadParameter("LLM API key is required to run an evaluation")
@@ -369,17 +372,6 @@ def mcp_list(
     for spec in specs.values():
         target = spec.url or f"{spec.command} {' '.join(spec.args)}".strip()
         typer.echo(f"{spec.name}\t{spec.type}\t{target}")
-
-
-@mcp_app.command("init-rag")
-def mcp_init_rag(
-    cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
-) -> None:
-    """Register the local Code RAG MCP server for this project."""
-    root = (cwd or Path.cwd()).resolve()
-    path = write_code_rag_config(scope_root=root)
-    typer.echo(f"Wrote Code RAG MCP config to {path}")
-    typer.echo("Run Vela and ask it to call index_repository before the first search.")
 
 
 # ---------------------------------------------------------------------------

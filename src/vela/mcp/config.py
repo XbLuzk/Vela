@@ -78,23 +78,6 @@ def write_chrome_devtools_config(
     return path
 
 
-def write_code_rag_config(*, scope_root: str | Path) -> Path:
-    """Register Vela's local code index as a project MCP server."""
-    root = Path(scope_root).resolve()
-    config_dir = root / ".vela"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    path = config_dir / "mcp.json"
-    data = _read_json(path) or {"mcpServers": {}}
-    servers = data.setdefault("mcpServers", {})
-    servers["code-rag"] = {
-        "type": "stdio",
-        "command": "vela-rag",
-        "args": ["--root", "${PROJECT_DIR}"],
-    }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return path
-
-
 def _read_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
