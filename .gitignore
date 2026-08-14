@@ -11,3 +11,7 @@ build/
 eval-results/
 .vela/
 /.playwright-cli
+
+# Local IDE and generated review artifacts
+.idea/
+.context/
