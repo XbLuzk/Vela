@@ -320,21 +320,25 @@ class InteractiveTaskController:
         else:
             self._set_state(TaskState.COMPLETED)
         finally:
-            review = self._review_future
-            if review is not None and not review.done():
-                review.cancel()
-            self._review_future = None
-            self._review_feedback_pending = False
-            approval = self._approval_future
-            if approval is not None and not approval.done():
-                approval.cancel()
-            for queued, _request in self._approval_queue:
-                if not queued.done():
-                    queued.cancel()
-            self._approval_queue.clear()
-            self._approval_future = None
-            self._approval_request = None
-            self._notify()
+            self._clear_pending_interactions()
+
+    def _clear_pending_interactions(self) -> None:
+        review = self._review_future
+        if review is not None and not review.done():
+            review.cancel()
+        self._review_future = None
+        self._review_feedback_pending = False
+
+        approval = self._approval_future
+        if approval is not None and not approval.done():
+            approval.cancel()
+        for queued, _request in self._approval_queue:
+            if not queued.done():
+                queued.cancel()
+        self._approval_queue.clear()
+        self._approval_future = None
+        self._approval_request = None
+        self._notify()
 
     async def _run_sequence(self, first: Awaitable[None]) -> None:
         """Run one foreground request, then queued follow-ups serially."""
