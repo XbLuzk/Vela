@@ -328,7 +328,11 @@ def test_eval_run_requires_explicit_trust_for_custom_suite(tmp_path, monkeypatch
     suite.write_text("{}", encoding="utf-8")
     monkeypatch.setenv("VELA_API_KEY", "test")
 
-    result = CliRunner().invoke(cli.app, ["eval", "run", str(suite), "--cwd", str(tmp_path)])
+    result = CliRunner().invoke(
+        cli.app,
+        ["eval", "run", str(suite), "--cwd", str(tmp_path)],
+        terminal_width=160,
+    )
 
     assert result.exit_code == 2
     assert "--allow-code-execution" in result.output
