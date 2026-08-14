@@ -5,30 +5,212 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from rich.console import Console
 from rich.table import Table
 
 from vela.branding import CLI_NAME, PRODUCT_NAME
 from vela.config import config_to_public_dict
 from vela.entrypoints.model_command import handle_model_command
+from vela.entrypoints.repl_tasks import print_session_warning, start_plan
 from vela.entrypoints.repl_ui import PermissionMode, permission_mode_label
 from vela.entrypoints.trace_command import parse_trace_args, show_run_traces
 from vela.memory import MemoryManager
 from vela.policy import AuditLog
 from vela.run_trace import RunTraceStore
+from vela.session import ActiveSession
 from vela.skill import SkillRegistry
+from vela.trust import ProjectTrustStore
 
 if TYPE_CHECKING:
     from vela.entrypoints.repl import ReplRuntime
 
+SLASH_COMMANDS = [
+    "/help",
+    "/exit",
+    "/clear",
+    "/cancel",
+    "/sessions",
+    "/resume",
+    "/context",
+    "/memory",
+    "/save",
+    "/config",
+    "/tools",
+    "/hitl",
+    "/policy",
+    "/audit",
+    "/plan",
+    "/model",
+    "/usage",
+    "/trace",
+    "/skill",
+    "/mcp",
+    "/trust",
+]
+
+INTERACTIVE_HELP = """\
+Task controls
+  /cancel              Cancel the current Agent, tool, or Plan task
+  Esc                   Cancel the current task
+  Ctrl+C                Cancel once; press again while cancelling to exit Vela
+  Ctrl+V                Save a macOS clipboard image and insert an @image reference
+  Enter                 Queue steering input while a ReAct task is running
+  Alt+Enter             Queue a follow-up after the current task finishes
+
+Plan review
+  execute               Confirm the displayed Plan
+  modify <requirement>  Replan with your feedback
+  cancel                Cancel before execution starts
+
+Sessions
+  /sessions             List sessions for the current project
+  /resume [id|number]   Resume a previous session
+  /plan --resume        Resume that session's interrupted LangGraph plan
+
+Runs
+  /trace                List recent Agent runs
+  /trace <id|number>    Inspect one persisted run summary
+
+Project trust
+  /trust                Trust project config, MCP, and Skills after restart
+  /trust deny           Revoke project trust after restart
+
+Other commands
+  {commands}
+"""
+
+
+async def handle_slash(raw: str, runtime: ReplRuntime) -> bool:
+    """Dispatch one slash command and return whether the REPL should exit."""
+    command, _, rest = raw.partition(" ")
+    arg = rest.strip()
+    if command in {"/exit", "/quit"}:
+        return True
+
+    if command in {"/help", "/cancel", "/clear"}:
+        _handle_repl_command(command, runtime)
+    elif command in {"/sessions", "/resume"}:
+        _handle_session_command(command, arg, runtime)
+    elif command in {"/context", "/memory", "/save"}:
+        handle_context_command(command, arg, runtime)
+    elif command == "/plan":
+        if arg:
+            start_plan(arg, runtime)
+        else:
+            runtime.console.print("[red]Usage:[/red] /plan <task>")
+    elif command == "/trust":
+        handle_trust_command(arg, runtime)
+    elif command in {
+        "/config",
+        "/tools",
+        "/hitl",
+        "/policy",
+        "/audit",
+        "/model",
+        "/usage",
+        "/trace",
+        "/skill",
+        "/mcp",
+    }:
+        await handle_settings_command(command, arg, runtime)
+    else:
+        runtime.console.print(f"[red]Unknown command:[/red] {command}")
+    return False
+
+
+def _handle_repl_command(command: str, runtime: ReplRuntime) -> None:
+    if command == "/help":
+        runtime.console.print(
+            INTERACTIVE_HELP.format(commands="  ".join(SLASH_COMMANDS)),
+            markup=False,
+        )
+    elif command == "/cancel":
+        if runtime.task_controller.request_cancel():
+            runtime.console.print("[yellow]正在取消当前任务……[/yellow]")
+        else:
+            runtime.console.print("[dim]当前没有正在运行的任务。[/dim]")
+    else:
+        runtime.agent.clear_history()
+        runtime.active_session.save(runtime.agent.history)
+        print_session_warning(runtime.console, runtime.active_session)
+        runtime.console.clear()
+
+
+def _handle_session_command(command: str, arg: str, runtime: ReplRuntime) -> None:
+    if command == "/sessions":
+        _sessions_command(runtime.console, runtime.active_session)
+    else:
+        _resume_command(arg, runtime)
+
+
+def handle_trust_command(arg: str, runtime: ReplRuntime) -> None:
+    normalized = arg.strip().lower()
+    if normalized not in {"", "allow", "trust", "deny", "revoke"}:
+        runtime.console.print("[red]Usage:[/red] /trust [deny]")
+        return
+    trusted = normalized not in {"deny", "revoke"}
+    try:
+        ProjectTrustStore().set(runtime.cwd, trusted)
+    except OSError as exc:
+        runtime.console.print(f"[red]Project trust could not be saved:[/red] {exc}")
+        return
+    state = "trusted" if trusted else "untrusted"
+    runtime.console.print(f"Project marked {state}. Restart Vela to reload project resources.")
+
+
+def _sessions_command(console: Console, active_session: ActiveSession) -> None:
+    sessions = active_session.list(limit=20)
+    print_session_warning(console, active_session)
+    if not sessions:
+        console.print("(no sessions)")
+        return
+    table = Table(title=f"{PRODUCT_NAME} Sessions")
+    table.add_column("#", justify="right")
+    table.add_column("Current")
+    table.add_column("Updated")
+    table.add_column("Messages", justify="right")
+    table.add_column("Session")
+    table.add_column("Title")
+    for index, record in enumerate(sessions, start=1):
+        table.add_row(
+            str(index),
+            "*" if record.id == active_session.current.id else "",
+            record.updated_at.replace("T", " ")[:19],
+            str(record.message_count),
+            record.id,
+            record.title,
+        )
+    console.print(table)
+
+
+def _resume_command(reference: str, runtime: ReplRuntime) -> None:
+    try:
+        record = runtime.active_session.switch(reference or None)
+    except ValueError as exc:
+        runtime.console.print(f"[red]{exc}[/red]")
+        return
+    print_session_warning(runtime.console, runtime.active_session)
+    if record is None:
+        runtime.console.print("[yellow]No matching previous session.[/yellow]")
+        return
+    runtime.agent.clear_history()
+    runtime.agent.history = list(record.messages)
+    runtime.agent.graph_thread_id = record.id
+    runtime.console.print(f"Resumed {record.id} ({record.message_count} messages).")
+
 
 def handle_context_command(command: str, arg: str, runtime: ReplRuntime) -> None:
     config = runtime.config
-    manager = MemoryManager(
-        config.memory.long_term_db_path,
-        scope=runtime.cwd,
-        max_entries=config.memory.max_long_term_entries,
-        max_content_length=config.memory.max_memory_chars,
-    )
+    try:
+        manager = MemoryManager(
+            config.memory.long_term_db_path,
+            scope=runtime.cwd,
+            max_entries=config.memory.max_long_term_entries,
+            max_content_length=config.memory.max_memory_chars,
+        )
+    except RuntimeError as exc:
+        runtime.console.print(f"[red]Memory unavailable:[/red] {exc}")
+        return
     if command == "/context":
         _show_context(runtime, len(manager.list(limit=5)))
     elif command == "/memory":

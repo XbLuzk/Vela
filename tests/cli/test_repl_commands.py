@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 
 from rich.console import Console
 
 from vela.config import load_config
-from vela.entrypoints import repl
-from vela.entrypoints.repl import ReplRuntime, _handle_slash, _handle_trust_command
+from vela.entrypoints import repl_commands
+from vela.entrypoints.repl import ReplRuntime
+from vela.entrypoints.repl_commands import handle_slash, handle_trust_command
 from vela.entrypoints.repl_ui import PermissionModeController
 from vela.render import RichRenderer
 from vela.session import ActiveSession, SessionStore
@@ -50,7 +53,7 @@ def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch)
         "/skill list",
         "/mcp",
     ):
-        asyncio.run(_handle_slash(command, runtime))
+        asyncio.run(handle_slash(command, runtime))
 
     output = stream.getvalue()
     assert "Saved memory" in output
@@ -61,6 +64,35 @@ def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch)
     assert runtime.permission_mode.mode == "auto"
 
 
+def test_memory_command_reports_legacy_database_without_ending_command_dispatch(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime, stream = _trust_runtime(tmp_path)
+    db_path = Path(runtime.config.memory.long_term_db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            create table memories (
+                id integer primary key autoincrement,
+                scope text not null,
+                content text not null,
+                created_at text not null
+            )
+            """
+        )
+
+    asyncio.run(handle_slash("/memory", runtime))
+    asyncio.run(handle_slash("/help", runtime))
+
+    output = stream.getvalue()
+    assert "Memory unavailable" in output
+    assert "Move or delete the old database" in output
+    assert "Task controls" in output
+
+
 def test_trust_command_persists_allow_and_deny_decisions(tmp_path, monkeypatch):
     saved: list[tuple[str, bool]] = []
 
@@ -69,10 +101,10 @@ def test_trust_command_persists_allow_and_deny_decisions(tmp_path, monkeypatch):
             saved.append((str(project_root), trusted))
 
     runtime, stream = _trust_runtime(tmp_path)
-    monkeypatch.setattr(repl, "ProjectTrustStore", Store)
+    monkeypatch.setattr(repl_commands, "ProjectTrustStore", Store)
 
-    _handle_trust_command("allow", runtime)
-    _handle_trust_command("deny", runtime)
+    handle_trust_command("allow", runtime)
+    handle_trust_command("deny", runtime)
 
     assert saved == [(str(tmp_path / "project"), True), (str(tmp_path / "project"), False)]
     assert "Project marked trusted" in stream.getvalue()
@@ -88,9 +120,9 @@ def test_trust_command_rejects_invalid_arguments_without_persisting(tmp_path, mo
             called = True
 
     runtime, stream = _trust_runtime(tmp_path)
-    monkeypatch.setattr(repl, "ProjectTrustStore", Store)
+    monkeypatch.setattr(repl_commands, "ProjectTrustStore", Store)
 
-    _handle_trust_command("maybe", runtime)
+    handle_trust_command("maybe", runtime)
 
     assert not called
     assert "Usage:" in stream.getvalue()
@@ -102,9 +134,9 @@ def test_trust_command_reports_store_errors(tmp_path, monkeypatch):
             raise OSError("locked")
 
     runtime, stream = _trust_runtime(tmp_path)
-    monkeypatch.setattr(repl, "ProjectTrustStore", Store)
+    monkeypatch.setattr(repl_commands, "ProjectTrustStore", Store)
 
-    _handle_trust_command("", runtime)
+    handle_trust_command("", runtime)
 
     assert "could not be saved" in stream.getvalue()
     assert "locked" in stream.getvalue()

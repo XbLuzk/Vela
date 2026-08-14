@@ -10,14 +10,13 @@ from rich.console import Console
 import vela.agent.agent as agent_module
 from vela.agent import Agent
 from vela.config import load_config
-from vela.entrypoints import repl
-from vela.entrypoints.repl import (
-    SLASH_COMMANDS,
-    _handle_slash,
-    _repl_loop,
-    _run_agent_with_session,
-    _run_delegated_with_session,
-    _run_events,
+from vela.entrypoints import repl, repl_tasks
+from vela.entrypoints.repl import _repl_loop
+from vela.entrypoints.repl_commands import SLASH_COMMANDS, handle_slash
+from vela.entrypoints.repl_tasks import (
+    run_agent_with_session,
+    run_delegated_with_session,
+    run_events,
 )
 from vela.render.rich_renderer import RichRenderer
 from vela.run_trace import RunTrace, RunTracker
@@ -45,8 +44,8 @@ def test_repl_lists_and_resumes_a_persisted_session(tmp_path):
     console = Console(file=stream, color_system=None, width=160)
     runtime = _repl_runtime(project, active, agent, console)
 
-    asyncio.run(_handle_slash("/sessions", runtime))
-    asyncio.run(_handle_slash("/resume", runtime))
+    asyncio.run(handle_slash("/sessions", runtime))
+    asyncio.run(handle_slash("/resume", runtime))
 
     output = stream.getvalue()
     assert "/sessions" in SLASH_COMMANDS
@@ -138,7 +137,7 @@ def test_repl_consumes_run_finished_before_raising_agent_error(tmp_path) -> None
         yield {"type": "error", "error": RuntimeError("provider failed")}
 
     with pytest.raises(RuntimeError, match="provider failed"):
-        asyncio.run(_run_events(tracker.stream(failed_events()), renderer))
+        asyncio.run(run_events(tracker.stream(failed_events()), renderer))
 
     output = stream.getvalue()
     assert "failed" in output
@@ -167,11 +166,11 @@ def test_repl_renders_cancelled_trace_before_propagating_cancel(tmp_path, monkey
     async def cancel_run(*_args, **_kwargs):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(repl, "_run_agent", cancel_run)
+    monkeypatch.setattr(repl_tasks, "run_events", cancel_run)
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(
-            _run_agent_with_session(
+            run_agent_with_session(
                 agent,
                 RichRenderer(console),
                 "cancel me",
@@ -240,14 +239,23 @@ def test_repl_persists_incremental_history_when_run_is_cancelled(tmp_path, monke
     agent = _FakeAgent()
     console = Console(file=StringIO(), color_system=None)
 
-    async def cancel_after_history_update(agent, renderer, message):  # noqa: ARG001
+    async def cancel_after_history_update(*_args, **_kwargs):
+        message = "persist me"
         agent.history = [Message(role="user", content=message)]
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(repl, "_run_agent", cancel_after_history_update)
+    monkeypatch.setattr(repl_tasks, "run_events", cancel_after_history_update)
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(_run_agent_with_session(agent, None, "persist me", active, console))
+        asyncio.run(
+            run_agent_with_session(
+                agent,
+                RichRenderer(console),
+                "persist me",
+                active,
+                console,
+            )
+        )
 
     persisted = store.get(active.current.id)
     assert persisted is not None
@@ -261,7 +269,8 @@ def test_repl_persists_and_resumes_cancelled_pending_tool_call(tmp_path, monkeyp
     agent = _FakeAgent()
     console = Console(file=StringIO(), color_system=None)
 
-    async def cancel_with_pending_tool(agent, renderer, message):  # noqa: ARG001
+    async def cancel_with_pending_tool(*_args, **_kwargs):
+        message = "resume me"
         agent.history = [
             Message(role="user", content=message),
             Message(
@@ -272,10 +281,18 @@ def test_repl_persists_and_resumes_cancelled_pending_tool_call(tmp_path, monkeyp
         ]
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(repl, "_run_agent", cancel_with_pending_tool)
+    monkeypatch.setattr(repl_tasks, "run_events", cancel_with_pending_tool)
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(_run_agent_with_session(agent, None, "resume me", active, console))
+        asyncio.run(
+            run_agent_with_session(
+                agent,
+                RichRenderer(console),
+                "resume me",
+                active,
+                console,
+            )
+        )
 
     resumed = ActiveSession.open(project, resume=True, store=store)
     tool_messages = [message for message in resumed.current.messages if message.role == "tool"]
@@ -334,7 +351,7 @@ def test_cancelled_run_keeps_completed_tool_result_and_closes_only_pending_call(
 
     async def run():
         task = asyncio.create_task(
-            _run_agent_with_session(
+            run_agent_with_session(
                 agent,
                 RichRenderer(console),
                 "run two tools",
@@ -421,7 +438,7 @@ def test_delegated_run_preserves_prior_history_and_persists_result(tmp_path):
     delegated = _FakeDelegatedAgent()
     console = Console(file=StringIO(), color_system=None)
 
-    asyncio.run(_run_delegated_with_session(delegated, "new task", agent, active, console))
+    asyncio.run(run_delegated_with_session(delegated, "new task", agent, active, console))
 
     assert [message.content for message in agent.history] == [
         "earlier request",
@@ -437,7 +454,7 @@ def _run_session_command(raw, project, active):
     agent = _FakeAgent()
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=160)
-    asyncio.run(_handle_slash(raw, _repl_runtime(project, active, agent, console)))
+    asyncio.run(handle_slash(raw, _repl_runtime(project, active, agent, console)))
     return agent, stream.getvalue()
 
 
@@ -508,6 +525,10 @@ class _FakeAgent:
 
     def clear_history(self):
         self.history = []
+
+    async def run(self, message):  # noqa: ARG002
+        if False:  # pragma: no cover - gives tests an inert async event stream
+            yield {}
 
 
 class _FakeDelegatedAgent:
