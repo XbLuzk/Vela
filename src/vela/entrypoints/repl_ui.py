@@ -111,6 +111,15 @@ def permission_key_bindings(
     bindings = KeyBindings()
     clipboard_jobs: set[asyncio.Task[None]] = set()
 
+    async def submit(event, delivery: MessageDelivery) -> None:
+        if clipboard_jobs:
+            await asyncio.gather(*tuple(clipboard_jobs), return_exceptions=True)
+        if event.app.is_done:
+            return
+        if message_delivery is not None:
+            message_delivery.mark(delivery)
+        event.app.current_buffer.validate_and_handle()
+
     @bindings.add(Keys.BackTab)
     def toggle_permission_mode(event) -> None:
         permission_mode.toggle()
@@ -142,21 +151,11 @@ def permission_key_bindings(
 
     @bindings.add(Keys.Enter)
     async def submit_after_clipboard(event) -> None:
-        if clipboard_jobs:
-            await asyncio.gather(*tuple(clipboard_jobs), return_exceptions=True)
-        if not event.app.is_done:
-            if message_delivery is not None:
-                message_delivery.mark("steering")
-            event.app.current_buffer.validate_and_handle()
+        await submit(event, "steering")
 
     @bindings.add(Keys.Escape, Keys.Enter)
     async def submit_follow_up(event) -> None:
-        if clipboard_jobs:
-            await asyncio.gather(*tuple(clipboard_jobs), return_exceptions=True)
-        if not event.app.is_done:
-            if message_delivery is not None:
-                message_delivery.mark("follow_up")
-            event.app.current_buffer.validate_and_handle()
+        await submit(event, "follow_up")
 
     return bindings
 

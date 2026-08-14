@@ -6,6 +6,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
@@ -23,7 +24,7 @@ from vela.events import AgentEvent
 from vela.llm.base import LlmClient
 from vela.plan import ExecutionPlan, Planner, Task, TaskStatus, TaskType
 from vela.prompt import PromptAssembler
-from vela.session import bounded_tool_transcript
+from vela.session_history import bounded_tool_transcript
 from vela.skill import SkillContextBuffer
 from vela.task_control import (
     PlanReviewAction,
@@ -56,6 +57,24 @@ class PlanTaskState(TypedDict):
 
 
 PlanRoute = Literal["plan", "dispatch", "cancel"]
+PlanEventWriter = Callable[[Any], None]
+
+
+@dataclass(slots=True)
+class _TaskRun:
+    text_parts: list[str] = field(default_factory=list)
+    tool_results: list[str] = field(default_factory=list)
+    usage: Usage = field(default_factory=Usage)
+    turns: int = 0
+    error: str = ""
+
+    @property
+    def result_text(self) -> str:
+        return "".join(self.text_parts).strip() or "\n".join(self.tool_results).strip()
+
+    @property
+    def status(self) -> str:
+        return "failed" if self.error else "completed"
 
 
 class LangGraphPlanAgent:
@@ -383,12 +402,30 @@ class LangGraphPlanAgent:
                 "task_description": task.description,
             }
         )
-        text = ""
-        tool_results: list[str] = []
-        usage = Usage()
-        turns = 0
+        run = await self._run_task(plan, task, writer)
+        self._write_task_result(writer, task, run)
+        return {
+            "task_results": [
+                {
+                    "task_id": task.id,
+                    "status": run.status,
+                    "text": run.result_text,
+                    "error": run.error,
+                    "usage": run.usage.to_dict(),
+                    "turns": run.turns,
+                }
+            ],
+            "usage_events": [run.usage.to_dict()],
+        }
+
+    async def _run_task(
+        self,
+        plan: ExecutionPlan,
+        task: Task,
+        writer: PlanEventWriter,
+    ) -> _TaskRun:
+        run = _TaskRun()
         transcript: list[Message] = []
-        error = ""
         try:
             async for event in run_react_agent(
                 llm_client=self.llm_client,
@@ -406,70 +443,71 @@ class LangGraphPlanAgent:
                 allow_uncertain_tool_retry=self._allow_uncertain_tool_retry,
                 max_turns=self.max_task_turns,
             ):
-                event_type = event.get("type")
-                if event_type == "text_delta":
-                    text += str(event.get("text") or "")
-                elif event_type == "tool_result":
-                    content = str(event.get("result") or "")
-                    if content:
-                        tool_results.append(content)
-                    writer(_with_task_context(event, task))
-                elif event_type in {
-                    "thinking_delta",
-                    "tool_call",
-                    "context_compressed",
-                    "turn_started",
-                    "model_response_complete",
-                    "turn_complete",
-                }:
-                    writer(_with_task_context(event, task))
-                elif event_type == "done":
-                    turns += int(event.get("total_turns") or 0)
-                    usage = usage + Usage.from_mapping(event.get("usage") or {})
-                elif event_type == "error":
-                    raise event["error"]
+                self._collect_task_event(run, task, event, writer)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - task failures are graph state, not graph crashes
-            error = str(exc)
+            run.error = str(exc)
         finally:
             self.history.extend(bounded_tool_transcript(transcript))
+        return run
 
-        result_text = text.strip() or "\n".join(tool_results).strip()
-        status = "failed" if error else "completed"
-        if error:
-            writer({"type": "text_delta", "text": f"失败 [{task.id}]：{error}\n\n"})
+    def _collect_task_event(
+        self,
+        run: _TaskRun,
+        task: Task,
+        event: AgentEvent,
+        writer: PlanEventWriter,
+    ) -> None:
+        event_type = event.get("type")
+        if event_type == "text_delta":
+            run.text_parts.append(str(event.get("text") or ""))
+        elif event_type == "tool_result":
+            content = str(event.get("result") or "")
+            if content:
+                run.tool_results.append(content)
+            writer(_with_task_context(event, task))
+        elif event_type in {
+            "thinking_delta",
+            "tool_call",
+            "context_compressed",
+            "turn_started",
+            "model_response_complete",
+            "turn_complete",
+        }:
+            writer(_with_task_context(event, task))
+        elif event_type == "done":
+            run.turns += int(event.get("total_turns") or 0)
+            run.usage = run.usage + Usage.from_mapping(event.get("usage") or {})
+        elif event_type == "error":
+            raise event["error"]
+
+    def _write_task_result(
+        self,
+        writer: PlanEventWriter,
+        task: Task,
+        run: _TaskRun,
+    ) -> None:
+        if run.error:
+            writer({"type": "text_delta", "text": f"失败 [{task.id}]：{run.error}\n\n"})
         else:
             writer(
                 {
                     "type": "text_delta",
-                    "text": f"已完成 [{task.id}]：{_preview(result_text)}\n\n",
+                    "text": f"已完成 [{task.id}]：{_preview(run.result_text)}\n\n",
                 }
             )
-        writer({"type": "usage", "usage": usage.to_dict()})
+        writer({"type": "usage", "usage": run.usage.to_dict()})
         writer(
             {
                 "type": "plan_task_done",
                 "task_id": task.id,
                 "task_description": task.description,
-                "task_status": status,
-                "turns": turns,
-                "tokens": usage.total_tokens,
+                "task_status": run.status,
+                "turns": run.turns,
+                "tokens": run.usage.total_tokens,
             }
         )
-        return {
-            "task_results": [
-                {
-                    "task_id": task.id,
-                    "status": status,
-                    "text": result_text,
-                    "error": error,
-                    "usage": usage.to_dict(),
-                    "turns": turns,
-                }
-            ],
-            "usage_events": [usage.to_dict()],
-        }
 
     def _finalize_node(self, state: PlanGraphState) -> dict[str, Any]:
         tasks = list(state["plan"].get("tasks") or [])

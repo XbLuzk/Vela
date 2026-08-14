@@ -12,7 +12,8 @@ from vela.agent import Agent, LangGraphPlanAgent
 from vela.events import AgentEvent
 from vela.render import RichRenderer
 from vela.run_trace import trace_finished_event
-from vela.session import ActiveSession, finalize_interrupted_history
+from vela.session import ActiveSession
+from vela.session_history import finalize_interrupted_history
 from vela.task_control import InteractiveTaskController, TaskState
 from vela.types import Message
 

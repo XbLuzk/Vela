@@ -101,9 +101,24 @@ class RichRenderer:
 
     def handle(self, event: AgentEvent) -> None:
         event_type = event.get("type")
-        if event_type == "run_started":
-            self._current_run_id = str(event.get("run_id") or "")
-        elif event_type == "text_delta":
+        if event_type in {"text_delta", "thinking_delta", "turn_complete"}:
+            self._handle_response_event(event_type, event)
+        elif event_type in {"plan_status", "plan_review", "plan_task_started"}:
+            self._handle_plan_event(event_type, event)
+        elif event_type in {"tool_call", "tool_result"}:
+            self._handle_tool_event(event_type, event)
+        elif event_type in {
+            "run_started",
+            "usage",
+            "steering_applied",
+            "error",
+            "done",
+            "run_finished",
+        }:
+            self._handle_run_event(event_type, event)
+
+    def _handle_response_event(self, event_type: str, event: AgentEvent) -> None:
+        if event_type == "text_delta":
             self._flush_thinking()
             text = str(event.get("text") or "")
             self._buffer.append(text)
@@ -116,19 +131,21 @@ class RichRenderer:
             thinking = str(event.get("thinking") or "")
             self._thinking_buffer.append(thinking)
             self._update_live_thinking()
-        elif event_type == "plan_status":
+        else:
+            stop_reason = str(event.get("stop_reason") or "end_turn")
+            title = "Assistant Output" if stop_reason == "tool_use" else "Final Output"
             self._flush_thinking()
-            self._flush_markdown(title="Plan")
-        elif event_type == "plan_review":
-            self._flush_thinking()
-            self._flush_markdown(title="Plan")
+            self._flush_markdown(title=title)
+
+    def _handle_plan_event(self, event_type: str, event: AgentEvent) -> None:
+        self._flush_thinking()
+        self._flush_markdown(title="Plan")
+        if event_type == "plan_review":
             self.console.print(
                 "[bold blue]确认计划：[/bold blue]输入 [bold]execute[/bold] 执行、"
                 "[bold]modify[/bold] 修改或 [bold]cancel[/bold] 取消。"
             )
         elif event_type == "plan_task_started":
-            self._flush_thinking()
-            self._flush_markdown(title="Plan")
             task_id = str(event.get("task_id") or "task")
             description = str(event.get("task_description") or "")
             self.console.print(
@@ -138,23 +155,22 @@ class RichRenderer:
                     border_style=RICH_STYLE_RULES["border"],
                 )
             )
+
+    def _handle_tool_event(self, event_type: str, event: AgentEvent) -> None:
+        self._flush_thinking()
+        self._flush_markdown(title="Assistant Output")
+        if event_type == "tool_call":
+            self._print_tool_call(event)
+        else:
+            self._print_tool_result(event)
+
+    def _handle_run_event(self, event_type: str, event: AgentEvent) -> None:
+        if event_type == "run_started":
+            self._current_run_id = str(event.get("run_id") or "")
         elif event_type == "usage":
             self._record_usage(event.get("usage") or {})
-        elif event_type == "turn_complete":
-            stop_reason = str(event.get("stop_reason") or "end_turn")
-            title = "Assistant Output" if stop_reason == "tool_use" else "Final Output"
-            self._flush_thinking()
-            self._flush_markdown(title=title)
         elif event_type == "steering_applied":
             self.console.print(Text("Steering message applied", style="dim"))
-        elif event_type == "tool_call":
-            self._flush_thinking()
-            self._flush_markdown(title="Assistant Output")
-            self._print_tool_call(event)
-        elif event_type == "tool_result":
-            self._flush_thinking()
-            self._flush_markdown(title="Assistant Output")
-            self._print_tool_result(event)
         elif event_type == "error":
             self._flush_thinking()
             self._flush_markdown(title="Assistant Output")
