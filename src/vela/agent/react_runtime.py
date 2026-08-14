@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
+from vela.agent.model_turn import ModelTurn, stream_model_turn
 from vela.config import VelaConfig
 from vela.context import ContextBudget, ContextEngine, ContextOverflowError, ContextResult
 from vela.events import AgentEvent
@@ -22,18 +23,17 @@ from vela.types import Message, Usage
 
 
 @dataclass(slots=True)
-class _ModelTurn:
-    """One streamed model response collected into a complete assistant turn."""
-
-    text: str = ""
-    stop_reason: str = "end_turn"
-    usage: Usage = field(default_factory=Usage)
-    tool_fragments: dict[int, dict[str, Any]] = field(default_factory=dict)
-    failed: bool = False
-    error: BaseException | None = None
-
-    def tool_calls(self) -> list[dict[str, Any]]:
-        return _complete_tool_calls(self.tool_fragments)
+class _ReactContext:
+    llm_client: LlmClient
+    config: VelaConfig
+    cwd: str
+    transcript: list[Message]
+    tool_definitions: list[dict[str, Any]]
+    system_prompt: str
+    context_engine: ContextEngine
+    tool_executor: ToolExecutor
+    tool_context: ToolContext
+    skill_context_buffer: SkillContextBuffer | None
 
 
 async def run_react_agent(
@@ -71,116 +71,54 @@ async def run_react_agent(
     transcript = history if history is not None else []
     transcript.append(Message(role="user", content=parse_image_references(user_message, cwd)))
 
-    tool_definitions = tool_registry.definitions()
-    effective_system_prompt = _build_system_prompt(
-        base=system_prompt,
-        user_message=original_user_message,
+    runtime = _ReactContext(
         llm_client=llm_client,
-        tool_registry=tool_registry,
-        cwd=cwd,
         config=config,
-    )
-    context_engine = _context_engine(llm_client, config)
-    tool_executor = ToolExecutor(tool_registry)
-    tool_context = ToolContext(
         cwd=cwd,
-        config=config,
-        approval_callback=approval_callback,
+        transcript=transcript,
+        tool_definitions=tool_registry.definitions(),
+        system_prompt=_build_system_prompt(
+            base=system_prompt,
+            user_message=original_user_message,
+            llm_client=llm_client,
+            tool_registry=tool_registry,
+            cwd=cwd,
+            config=config,
+        ),
+        context_engine=_context_engine(llm_client, config),
+        tool_executor=ToolExecutor(tool_registry),
+        tool_context=ToolContext(
+            cwd=cwd,
+            config=config,
+            approval_callback=approval_callback,
+            skill_context_buffer=skill_context_buffer,
+            execution_scope=tool_execution_scope,
+            allow_uncertain_retry=allow_uncertain_tool_retry,
+        ),
         skill_context_buffer=skill_context_buffer,
-        execution_scope=tool_execution_scope,
-        allow_uncertain_retry=allow_uncertain_tool_retry,
     )
 
     total_usage = Usage()
     completed_turns = 0
     try:
         for turn_number in range(1, max_turns + 1):
-            overflow_retried = False
-            compression_event = _compress_context(
-                transcript,
-                context_engine=context_engine,
-                system_prompt=effective_system_prompt,
-                tool_definitions=tool_definitions,
-                enabled=config.features.context_compression,
+            model_turn = ModelTurn()
+            turn_stream = _stream_react_turn(
+                runtime,
+                turn_number=turn_number,
+                max_turns=max_turns,
+                turn=model_turn,
             )
-            if compression_event is not None:
-                yield compression_event
-
-            yield {"type": "turn_started", "turn": turn_number}
-
-            while True:
-                model_turn = _ModelTurn()
-                model_stream = _stream_model_turn(
-                    llm_client,
-                    transcript,
-                    tool_definitions,
-                    effective_system_prompt,
-                    model_turn,
-                )
-                try:
-                    async for event in model_stream:
-                        yield event
-                finally:
-                    await model_stream.aclose()
-                if not model_turn.failed:
-                    break
-                error = model_turn.error or RuntimeError("Model request failed")
-                if (
-                    isinstance(error, ContextOverflowError)
-                    and config.features.context_compression
-                    and not overflow_retried
-                ):
-                    try:
-                        recovered = context_engine.recover_from_overflow(
-                            transcript,
-                            system_prompt=effective_system_prompt,
-                            tool_definitions=tool_definitions,
-                        )
-                    except ContextOverflowError as recovery_error:
-                        yield {"type": "error", "error": recovery_error}
-                        return
-                    transcript[:] = recovered.messages
-                    overflow_retried = True
-                    yield _context_compressed_event(recovered, recovered_from_overflow=True)
-                    continue
-                yield {"type": "error", "error": error}
+            try:
+                async for event in turn_stream:
+                    yield event
+            finally:
+                await turn_stream.aclose()
+            if model_turn.failed:
                 return
 
             completed_turns = turn_number
             total_usage = total_usage + model_turn.usage
-            tool_calls = model_turn.tool_calls()
-            if _has_incomplete_tool_request(model_turn, tool_calls):
-                raise RuntimeError("Model returned an incomplete tool-call stream.")
-            transcript.append(
-                Message(role="assistant", content=model_turn.text, tool_calls=tool_calls)
-            )
-            yield {
-                "type": "model_response_complete",
-                "turn": turn_number,
-                "stop_reason": model_turn.stop_reason,
-            }
-
-            if tool_calls and turn_number == max_turns:
-                _close_skipped_tool_calls(transcript, tool_calls, max_turns)
-                raise RuntimeError(f"Agent reached the model turn limit ({max_turns}).")
-            if tool_calls:
-                tool_stream = _execute_tool_round(
-                    tool_calls,
-                    executor=tool_executor,
-                    context=tool_context,
-                    transcript=transcript,
-                    skill_context_buffer=skill_context_buffer,
-                )
-                try:
-                    async for event in tool_stream:
-                        yield event
-                finally:
-                    await tool_stream.aclose()
-            yield {
-                "type": "turn_complete",
-                "turn": turn_number,
-                "stop_reason": model_turn.stop_reason,
-            }
             steering = (
                 steering_callback() if steering_callback and turn_number < max_turns else None
             )
@@ -194,7 +132,7 @@ async def run_react_agent(
                 )
                 yield {"type": "steering_applied"}
                 continue
-            if not tool_calls:
+            if not model_turn.tool_fragments:
                 break
     except asyncio.CancelledError:
         raise
@@ -214,46 +152,110 @@ async def run_react_agent(
     }
 
 
-async def _stream_model_turn(
-    client: LlmClient,
-    transcript: list[Message],
-    tool_definitions: list[dict[str, Any]],
-    system_prompt: str,
-    turn: _ModelTurn,
+async def _stream_react_turn(
+    runtime: _ReactContext,
+    *,
+    turn_number: int,
+    max_turns: int,
+    turn: ModelTurn,
 ) -> AsyncIterator[AgentEvent]:
-    events = client.chat(
-        transcript,
-        tool_definitions,
-        system_prompt=system_prompt,
+    compression_event = _compress_context(
+        runtime.transcript,
+        context_engine=runtime.context_engine,
+        system_prompt=runtime.system_prompt,
+        tool_definitions=runtime.tool_definitions,
+        enabled=runtime.config.features.context_compression,
     )
+    if compression_event is not None:
+        yield compression_event
+    yield {"type": "turn_started", "turn": turn_number}
+
+    model_stream = _stream_model_with_overflow_recovery(runtime=runtime, turn=turn)
     try:
-        async for event in events:
-            event_type = event.get("type")
-            if event_type == "text_delta":
-                text = str(event.get("text") or "")
-                turn.text += text
-                yield {"type": "text_delta", "text": text}
-            elif event_type == "thinking_delta":
-                yield {"type": "thinking_delta", "thinking": str(event.get("thinking") or "")}
-            elif event_type == "tool_call_delta":
-                fragment = event.get("tool_call")
-                if isinstance(fragment, dict):
-                    _merge_tool_fragment(turn.tool_fragments, fragment)
-            elif event_type == "message_end":
-                turn.stop_reason = str(event.get("stop_reason") or "end_turn")
-            elif event_type == "usage":
-                usage = Usage.from_mapping(event.get("usage") or {})
-                turn.usage = turn.usage + usage
-                yield {"type": "usage", "usage": usage.to_dict()}
-            elif event_type == "error":
-                error = event.get("error")
-                turn.failed = True
-                turn.error = error if isinstance(error, BaseException) else RuntimeError(str(error))
-                return
+        async for event in model_stream:
+            yield event
     finally:
-        close = getattr(events, "aclose", None)
-        if close is not None:
-            await close()
+        await model_stream.aclose()
+    if turn.failed:
+        return
+
+    tool_calls = turn.tool_calls()
+    if turn.has_incomplete_tool_request(tool_calls):
+        raise RuntimeError("Model returned an incomplete tool-call stream.")
+    runtime.transcript.append(Message(role="assistant", content=turn.text, tool_calls=tool_calls))
+    yield {
+        "type": "model_response_complete",
+        "turn": turn_number,
+        "stop_reason": turn.stop_reason,
+    }
+
+    if tool_calls and turn_number == max_turns:
+        _close_skipped_tool_calls(runtime.transcript, tool_calls, max_turns)
+        raise RuntimeError(f"Agent reached the model turn limit ({max_turns}).")
+    if tool_calls:
+        tool_stream = _execute_tool_round(
+            tool_calls,
+            executor=runtime.tool_executor,
+            context=runtime.tool_context,
+            transcript=runtime.transcript,
+            skill_context_buffer=runtime.skill_context_buffer,
+        )
+        try:
+            async for event in tool_stream:
+                yield event
+        finally:
+            await tool_stream.aclose()
+    yield {
+        "type": "turn_complete",
+        "turn": turn_number,
+        "stop_reason": turn.stop_reason,
+    }
+
+
+async def _stream_model_with_overflow_recovery(
+    *,
+    runtime: _ReactContext,
+    turn: ModelTurn,
+) -> AsyncIterator[AgentEvent]:
+    overflow_retried = False
+    while True:
+        turn.reset()
+        events = stream_model_turn(
+            runtime.llm_client,
+            runtime.transcript,
+            runtime.tool_definitions,
+            runtime.system_prompt,
+            turn,
+        )
+        try:
+            async for event in events:
+                yield event
+        finally:
+            await events.aclose()
+        if not turn.failed:
+            return
+
+        error = turn.error or RuntimeError("Model request failed")
+        if not (
+            isinstance(error, ContextOverflowError)
+            and runtime.config.features.context_compression
+            and not overflow_retried
+        ):
+            yield {"type": "error", "error": error}
+            return
+        try:
+            recovered = runtime.context_engine.recover_from_overflow(
+                runtime.transcript,
+                system_prompt=runtime.system_prompt,
+                tool_definitions=runtime.tool_definitions,
+            )
+        except ContextOverflowError as recovery_error:
+            turn.error = recovery_error
+            yield {"type": "error", "error": recovery_error}
+            return
+        runtime.transcript[:] = recovered.messages
+        overflow_retried = True
+        yield _context_compressed_event(recovered, recovered_from_overflow=True)
 
 
 async def _execute_tool_round(
@@ -291,53 +293,6 @@ async def _execute_tool_round(
         await results.aclose()
 
 
-def _merge_tool_fragment(states: dict[int, dict[str, Any]], fragment: dict[str, Any]) -> None:
-    index = _tool_fragment_index(states, fragment)
-    state = states.setdefault(
-        index,
-        {
-            "id": "",
-            "type": "function",
-            "function": {"name": "", "arguments": ""},
-        },
-    )
-    if fragment.get("id"):
-        state["id"] = str(fragment["id"])
-    function = fragment.get("function")
-    if not isinstance(function, dict):
-        return
-    if function.get("name"):
-        state["function"]["name"] = _merge_text_fragment(
-            str(state["function"]["name"]),
-            str(function["name"]),
-        )
-    if function.get("arguments") is not None:
-        state["function"]["arguments"] += str(function["arguments"])
-
-
-def _merge_text_fragment(current: str, incoming: str) -> str:
-    """Accept both incremental deltas and providers that repeat the full value."""
-    if not current or not incoming:
-        return current or incoming
-    if incoming == current:
-        return current
-    if incoming.startswith(current):
-        return incoming
-    return current + incoming
-
-
-def _complete_tool_calls(states: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    calls: list[dict[str, Any]] = []
-    used_ids: set[str] = set()
-    for index in sorted(states):
-        call = states[index]
-        if not tool_call_name(call):
-            continue
-        call["id"] = _unique_tool_id(str(call.get("id") or f"tool_{index}"), used_ids)
-        calls.append(call)
-    return calls
-
-
 def _close_skipped_tool_calls(
     transcript: list[Message],
     tool_calls: list[dict[str, Any]],
@@ -356,59 +311,6 @@ def _close_skipped_tool_calls(
                 ),
             )
         )
-
-
-def _tool_fragment_index(
-    states: dict[int, dict[str, Any]],
-    fragment: dict[str, Any],
-) -> int:
-    raw_index = fragment.get("index")
-    if raw_index is not None:
-        try:
-            index = int(raw_index)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"Invalid tool-call fragment index: {raw_index!r}") from exc
-        if index < 0:
-            raise RuntimeError(f"Invalid tool-call fragment index: {index}")
-        return index
-
-    fragment_id = str(fragment.get("id") or "")
-    matching = [index for index, state in states.items() if state.get("id") == fragment_id]
-    if fragment_id and matching:
-        if len(matching) == 1:
-            return matching[0]
-        raise RuntimeError(f"Ambiguous tool-call fragment with duplicate id: {fragment_id!r}")
-    if not states:
-        return 0
-    if len(states) == 1 and not fragment_id:
-        return next(iter(states))
-
-    function = fragment.get("function")
-    name = str(function.get("name") or "") if isinstance(function, dict) else ""
-    if fragment_id and name:
-        return max(states) + 1
-    raise RuntimeError("Ambiguous tool-call fragment without a stable index or id.")
-
-
-def _has_incomplete_tool_request(
-    turn: _ModelTurn,
-    tool_calls: list[dict[str, Any]],
-) -> bool:
-    return len(tool_calls) != len(turn.tool_fragments) or (
-        turn.stop_reason == "tool_use" and not tool_calls
-    )
-
-
-def _unique_tool_id(candidate: str, used_ids: set[str]) -> str:
-    if candidate not in used_ids:
-        used_ids.add(candidate)
-        return candidate
-    suffix = 2
-    while f"{candidate}_{suffix}" in used_ids:
-        suffix += 1
-    unique = f"{candidate}_{suffix}"
-    used_ids.add(unique)
-    return unique
 
 
 def _tool_result_event(tool_call_id: str, name: str, result: ToolResult) -> AgentEvent:

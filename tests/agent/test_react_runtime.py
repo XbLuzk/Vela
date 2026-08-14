@@ -1082,11 +1082,28 @@ def test_context_overflow_compacts_and_retries_the_same_model_turn(tmp_path, mon
         async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
             self.calls += 1
             if self.calls == 1:
+                yield {"type": "text_delta", "text": "discarded partial answer"}
+                yield {
+                    "type": "usage",
+                    "usage": {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+                }
+                yield {
+                    "type": "tool_call_delta",
+                    "tool_call": {
+                        "index": 0,
+                        "id": "discarded_tool",
+                        "function": {"name": "ghost_tool", "arguments": "{}"},
+                    },
+                }
                 yield {"type": "error", "error": ContextOverflowError("provider overflow")}
                 return
             assert all(message.content != "old request" for message in messages)
             assert messages[-1].content == "current request"
             yield {"type": "text_delta", "text": "recovered"}
+            yield {
+                "type": "usage",
+                "usage": {"input_tokens": 8, "output_tokens": 3, "total_tokens": 11},
+            }
             yield {"type": "message_end", "stop_reason": "end_turn"}
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -1116,6 +1133,10 @@ def test_context_overflow_compacts_and_retries_the_same_model_turn(tmp_path, mon
     assert [event["type"] for event in events].count("turn_started") == 1
     assert client.calls == 2
     assert not any(event["type"] == "error" for event in events)
+    assert not any(event["type"] == "tool_call" for event in events)
+    assert agent.history[-1].content == "recovered"
+    assert agent.history[-1].tool_calls == []
+    assert next(event for event in events if event["type"] == "done")["total_tokens"] == 11
 
 
 def test_context_overflow_is_retried_only_once_per_model_turn(tmp_path, monkeypatch):
