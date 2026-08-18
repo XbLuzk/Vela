@@ -158,6 +158,19 @@ def test_streaming_text_waits_for_turn_boundary_by_default():
     assert stream.getvalue().count("Final Output") == 1
 
 
+def test_streaming_thinking_waits_for_output_boundary_by_default():
+    stream = StringIO()
+    console = Console(file=stream, color_system=None, width=120, force_terminal=True)
+    renderer = RichRenderer(console=console)
+
+    renderer.handle({"type": "thinking_delta", "thinking": "chunk 1"})
+    renderer.handle({"type": "thinking_delta", "thinking": "chunk 2"})
+
+    assert stream.getvalue() == ""
+    renderer.handle({"type": "text_delta", "text": "done"})
+    assert stream.getvalue().count("Thinking") == 1
+
+
 def test_tool_use_and_result_render_as_structured_panels():
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=120)

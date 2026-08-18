@@ -423,9 +423,42 @@ def test_help_explains_cancel_plan_review_and_resume_contracts(tmp_path):
 
     assert agent is not None
     assert "/cancel" in output
+    assert "Wait for completion or cancel before submitting another task" in output
     assert "modify <requirement>" in output
     assert "/resume [id|number]" in output
     assert "Ctrl+C" in output
+
+
+def test_running_task_rejects_another_message_without_starting_or_queueing_it(tmp_path):
+    store = SessionStore(tmp_path / "sessions.db")
+    active = ActiveSession.open(tmp_path / "project", store=store)
+    controller = InteractiveTaskController()
+    console = Console(file=StringIO(), color_system=None)
+
+    async def never_finishes():
+        await asyncio.Event().wait()
+
+    async def run():
+        controller.start(
+            never_finishes(),
+            initial_state=TaskState.RUNNING,
+            label="current task",
+        )
+        runtime = _repl_runtime(
+            tmp_path / "project",
+            active,
+            _FakeAgent(),
+            console,
+            task_controller=controller,
+        )
+        assert not await repl._dispatch_message("next task", runtime)
+        assert controller.active
+        controller.request_cancel()
+        await controller.wait()
+
+    asyncio.run(run())
+
+    assert "当前任务仍在运行" in console.file.getvalue()
 
 
 def test_delegated_run_preserves_prior_history_and_persists_result(tmp_path):

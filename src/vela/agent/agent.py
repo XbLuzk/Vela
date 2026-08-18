@@ -55,7 +55,6 @@ class Agent:
         plan_review_callback: (
             Callable[[Any], PlanReviewDecision | Awaitable[PlanReviewDecision]] | None
         ) = None,
-        steering_callback: Callable[[], str | None] | None = None,
         trace_store: RunTraceStore | None = None,
     ) -> None:
         self.llm_client = llm_client
@@ -66,7 +65,6 @@ class Agent:
         self.mode = mode
         self.max_turns = max_turns
         self.plan_review_callback = plan_review_callback
-        self.steering_callback = steering_callback
         self.graph_thread_id: str | None = None
         self.trace_store = trace_store
         self.last_run_trace: RunTrace | None = None
@@ -186,7 +184,6 @@ class Agent:
             config=self.config,
             approval_callback=self.approval_callback,
             skill_context_buffer=self.skill_context_buffer,
-            steering_callback=self.steering_callback,
             max_turns=self.max_turns,
         )
         try:

@@ -1016,60 +1016,6 @@ def test_react_loop_rejects_non_positive_turn_limits(tmp_path, monkeypatch, max_
     assert client.calls == 0
 
 
-def test_steering_message_is_applied_after_current_tool_round(tmp_path, monkeypatch):
-    class SteeringClient:
-        model_name = "fake-model"
-        provider_name = "fake-provider"
-        max_context_window = 20_000
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
-            self.calls += 1
-            if self.calls == 1:
-                yield {
-                    "type": "tool_call_delta",
-                    "tool_call": {
-                        "index": 0,
-                        "id": "read_1",
-                        "function": {
-                            "name": "read_file",
-                            "arguments": '{"path":"note.txt"}',
-                        },
-                    },
-                }
-                yield {"type": "message_end", "stop_reason": "tool_use"}
-                return
-            assert messages[-2].role == "tool"
-            assert messages[-1].role == "user"
-            assert messages[-1].content == "change direction"
-            yield {"type": "text_delta", "text": "adjusted"}
-            yield {"type": "message_end", "stop_reason": "end_turn"}
-
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    (tmp_path / "note.txt").write_text("hello", encoding="utf-8")
-    config = load_config(project_root=tmp_path)
-    config.llm.api_key = "test-key"
-    config.features.context_compression = False
-    config.features.skill = False
-    pending = ["change direction"]
-    agent = Agent(
-        llm_client=SteeringClient(),
-        tool_registry=_builtin_registry(),
-        config=config,
-        cwd=str(tmp_path),
-        steering_callback=lambda: pending.pop(0) if pending else None,
-    )
-
-    events = asyncio.run(_collect(agent.run("read the note")))
-
-    event_types = [event["type"] for event in events]
-    assert event_types.index("tool_result") < event_types.index("steering_applied")
-    assert event_types.count("turn_started") == 2
-    assert agent.history[-1].content == "adjusted"
-
-
 def test_context_overflow_compacts_and_retries_the_same_model_turn(tmp_path, monkeypatch):
     class OverflowOnceClient:
         model_name = "fake-model"

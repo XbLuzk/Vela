@@ -51,7 +51,6 @@ async def run_react_agent(
     skill_context_buffer: SkillContextBuffer | None = None,
     tool_execution_scope: str | None = None,
     allow_uncertain_tool_retry: bool = False,
-    steering_callback: Callable[[], str | None] | None = None,
     max_turns: int = 20,
 ) -> AsyncIterator[AgentEvent]:
     """Run one request and update a supplied ``history`` transcript in place.
@@ -119,19 +118,6 @@ async def run_react_agent(
 
             completed_turns = turn_number
             total_usage = total_usage + model_turn.usage
-            steering = (
-                steering_callback() if steering_callback and turn_number < max_turns else None
-            )
-            if steering:
-                _append_steering_message(
-                    transcript,
-                    steering,
-                    cwd=cwd,
-                    config=config,
-                    skill_context_buffer=skill_context_buffer,
-                )
-                yield {"type": "steering_applied"}
-                continue
             if not model_turn.tool_fragments:
                 break
     except asyncio.CancelledError:
@@ -409,19 +395,6 @@ def _prepend_skill_context(
     if not loaded:
         return user_message
     return f"{loaded}\n\n---\nUser request:\n{user_message}"
-
-
-def _append_steering_message(
-    transcript: list[Message],
-    message: str,
-    *,
-    cwd: str,
-    config: VelaConfig,
-    skill_context_buffer: SkillContextBuffer | None,
-) -> None:
-    enriched = _prepend_skill_candidates(message, cwd, config)
-    enriched = _prepend_skill_context(enriched, skill_context_buffer)
-    transcript.append(Message(role="user", content=parse_image_references(enriched, cwd)))
 
 
 def _drain_skill_context(skill_context_buffer: SkillContextBuffer | None) -> str:

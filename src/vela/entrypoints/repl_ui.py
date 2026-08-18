@@ -39,22 +39,6 @@ REPL_STYLE_RULES = {
 }
 
 PermissionMode = Literal["default", "auto"]
-MessageDelivery = Literal["steering", "follow_up"]
-
-
-@dataclass(slots=True)
-class MessageDeliveryController:
-    """Remember which submit shortcut produced the next prompt value."""
-
-    _next: MessageDelivery = "steering"
-
-    def mark(self, delivery: MessageDelivery) -> None:
-        self._next = delivery
-
-    def consume(self) -> MessageDelivery:
-        delivery = self._next
-        self._next = "steering"
-        return delivery
 
 
 @dataclass
@@ -87,7 +71,7 @@ class PermissionModeController:
 
 
 class BorderedPromptSession(PromptSession):
-    """Prompt Toolkit session with a rule below the current input line."""
+    """Prompt Toolkit session with a stable bordered input area."""
 
     def _create_layout(self):
         layout = super()._create_layout()
@@ -102,28 +86,32 @@ def permission_key_bindings(
     permission_mode: PermissionModeController,
     task_controller: InteractiveTaskController | None = None,
     *,
-    message_delivery: MessageDeliveryController | None = None,
     console: Console | None = None,
     clipboard_grabber: Callable[[], ClipboardImageResult] = grab_clipboard_image,
 ) -> KeyBindings:
-    """Build the Shift+Tab, Esc, Ctrl+V, and Enter shortcuts."""
+    """Build the Space, Shift+Tab, Esc, Ctrl+V, and Enter shortcuts."""
 
     bindings = KeyBindings()
     clipboard_jobs: set[asyncio.Task[None]] = set()
 
-    async def submit(event, delivery: MessageDelivery) -> None:
+    async def submit(event) -> None:
         if clipboard_jobs:
             await asyncio.gather(*tuple(clipboard_jobs), return_exceptions=True)
         if event.app.is_done:
             return
-        if message_delivery is not None:
-            message_delivery.mark(delivery)
         event.app.current_buffer.validate_and_handle()
 
     @bindings.add(Keys.BackTab)
     def toggle_permission_mode(event) -> None:
         permission_mode.toggle()
         event.app.invalidate()
+
+    @bindings.add(" ")
+    def insert_space(event) -> None:
+        buffer = event.app.current_buffer
+        if task_controller is not None and task_controller.active and not buffer.text.strip():
+            return
+        buffer.insert_text(" ")
 
     @bindings.add(Keys.Escape)
     def cancel_running_task(event) -> None:
@@ -151,11 +139,7 @@ def permission_key_bindings(
 
     @bindings.add(Keys.Enter)
     async def submit_after_clipboard(event) -> None:
-        await submit(event, "steering")
-
-    @bindings.add(Keys.Escape, Keys.Enter)
-    async def submit_follow_up(event) -> None:
-        await submit(event, "follow_up")
+        await submit(event)
 
     return bindings
 

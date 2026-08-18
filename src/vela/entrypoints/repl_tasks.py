@@ -111,7 +111,6 @@ def start_plan(arg: str, runtime: ReplRuntime) -> None:
         run,
         initial_state=TaskState.PLANNING,
         label=arg,
-        accepts_steering=False,
     )
 
 

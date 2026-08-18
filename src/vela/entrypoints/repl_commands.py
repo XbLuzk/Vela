@@ -51,11 +51,10 @@ SLASH_COMMANDS = [
 INTERACTIVE_HELP = """\
 Task controls
   /cancel              Cancel the current Agent, tool, or Plan task
+  New task             Wait for completion or cancel before submitting another task
   Esc                   Cancel the current task
   Ctrl+C                Cancel once; press again while cancelling to exit Vela
   Ctrl+V                Save a macOS clipboard image and insert an @image reference
-  Enter                 Queue steering input while a ReAct task is running
-  Alt+Enter             Queue a follow-up after the current task finishes
 
 Plan review
   execute               Confirm the displayed Plan

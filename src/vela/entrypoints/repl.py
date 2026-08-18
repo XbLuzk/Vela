@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +23,6 @@ from vela.entrypoints.repl_tasks import print_session_warning, run_agent_with_se
 from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
     BorderedPromptSession,
-    MessageDelivery,
-    MessageDeliveryController,
     PermissionModeController,
     permission_key_bindings,
     prompt_message,
@@ -51,7 +49,6 @@ class ReplRuntime:
     renderer: RichRenderer
     active_session: ActiveSession
     task_controller: InteractiveTaskController
-    message_delivery: MessageDeliveryController = field(default_factory=MessageDeliveryController)
 
 
 # Startup ---------------------------------------------------------------------
@@ -74,14 +71,12 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
     task_controller = InteractiveTaskController(
         on_error=lambda exc: console.print(f"[red]Task failed:[/red] {exc}")
     )
-    message_delivery = MessageDeliveryController()
     agent = Agent(
         llm_client=client,
         tool_registry=registry,
         cwd=cwd,
         config=config,
         plan_review_callback=task_controller.request_plan_review,
-        steering_callback=task_controller.take_steering_message,
         approval_callback=lambda request: _approval_prompt(
             request,
             console,
@@ -124,35 +119,13 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         key_bindings=permission_key_bindings(
             permission_mode,
             task_controller,
-            message_delivery=message_delivery,
             console=console,
         ),
     )
 
-    def refresh_prompt() -> None:
-        if task_controller.state in {TaskState.CANCELLED, TaskState.FAILED}:
-            pending = task_controller.take_pending_messages()
-            if pending:
-                restored = "\n\n".join(pending)
-                buffer = session.default_buffer
-                separator = "\n\n" if buffer.text and restored else ""
-                buffer.text = f"{buffer.text}{separator}{restored}"
-                buffer.cursor_position = len(buffer.text)
-        session.app.invalidate()
-
     task_controller.set_callbacks(
-        on_change=refresh_prompt,
+        on_change=session.app.invalidate,
         on_error=lambda exc: console.print(f"[red]Task failed:[/red] {exc}"),
-    )
-    task_controller.set_follow_up_runner(
-        lambda message: run_agent_with_session(
-            agent,
-            renderer,
-            message,
-            active_session,
-            console,
-            task_controller,
-        )
     )
     runtime = ReplRuntime(
         console=console,
@@ -164,7 +137,6 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         renderer=renderer,
         active_session=active_session,
         task_controller=task_controller,
-        message_delivery=message_delivery,
     )
 
     with patch_stdout(raw=True):
@@ -203,9 +175,8 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
             print_session_warning(console, active_session)
             console.print()
             return
-        delivery = runtime.message_delivery.consume()
         message = user_input.strip()
-        if await _dispatch_message(message, delivery, runtime):
+        if await _dispatch_message(message, runtime):
             active_session.close()
             print_session_warning(console, active_session)
             return
@@ -213,7 +184,6 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
 
 async def _dispatch_message(
     message: str,
-    delivery: MessageDelivery,
     runtime: ReplRuntime,
 ) -> bool:
     """Route one submitted prompt and report whether the REPL should exit."""
@@ -233,11 +203,9 @@ async def _dispatch_message(
         runtime.console.print(controller.submit_plan_review(message))
         return False
     if controller.active:
-        queued_as = controller.queue_message(message, delivery=delivery)
-        if queued_as == "steering":
-            runtime.console.print("[dim]已排队：当前轮次的工具完成后送入 Agent。[/dim]")
-        else:
-            runtime.console.print("[dim]已排队：当前任务完成后继续执行。[/dim]")
+        runtime.console.print(
+            "[yellow]当前任务仍在运行；使用 /cancel、Esc 或 Ctrl+C 取消。[/yellow]"
+        )
         return False
     if message.startswith("/"):
         return await handle_slash(message, runtime)

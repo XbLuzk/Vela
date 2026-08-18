@@ -21,7 +21,6 @@ Vela ReAct 循环，复杂任务使用可恢复的 LangGraph Plan DAG，并通�
 - [x] 建立可重复执行的 Agent 编码任务集、结果指标和版本对比。
 - [x] 内置自动管理的 Code RAG，通过 MCP 隔离增量索引且不增加核心 Agent 依赖。
 - [x] 建立有界 Context Engine，统一工具结果裁剪和结构化历史摘要。
-- [x] 支持 ReAct steering、串行 follow-up 和取消后未发送消息恢复。
 - [x] 在 Provider 上下文超限后压缩旧轮次并安全重试一次。
 - [x] 为项目级配置、MCP、`.env` 和 Skills 建立持久化 Trust 边界。
 - [x] 用同一 Run ID 关联工具 Audit，串起模型执行与副作用记录。

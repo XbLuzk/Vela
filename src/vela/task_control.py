@@ -5,7 +5,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 
 class TaskState(StrEnum):
@@ -80,10 +80,6 @@ class InteractiveTaskController:
         self._approval_future: asyncio.Future[str] | None = None
         self._approval_request: dict[str, Any] | None = None
         self._approval_queue: deque[tuple[asyncio.Future[str], dict[str, Any]]] = deque()
-        self._steering_messages: deque[str] = deque()
-        self._follow_up_messages: deque[str] = deque()
-        self._follow_up_runner: Callable[[str], Awaitable[None]] | None = None
-        self._accepts_steering = True
         self._review_feedback_pending = False
         self._watch_started = False
         self._cancel_requested = False
@@ -114,10 +110,6 @@ class InteractiveTaskController:
     def approval_request(self) -> dict[str, Any] | None:
         return self._approval_request
 
-    @property
-    def queued_messages(self) -> int:
-        return len(self._steering_messages) + len(self._follow_up_messages)
-
     def set_callbacks(
         self,
         *,
@@ -127,17 +119,12 @@ class InteractiveTaskController:
         self._on_change = on_change
         self._on_error = on_error
 
-    def set_follow_up_runner(self, runner: Callable[[str], Awaitable[None]]) -> None:
-        """Set the REPL-owned runner used after the current request finishes."""
-        self._follow_up_runner = runner
-
     def start(
         self,
         awaitable: Awaitable[None],
         *,
         initial_state: TaskState,
         label: str,
-        accepts_steering: bool = True,
     ) -> None:
         if self.active:
             if hasattr(awaitable, "close"):
@@ -147,43 +134,8 @@ class InteractiveTaskController:
         self.error = None
         self._watch_started = False
         self._cancel_requested = False
-        self._accepts_steering = accepts_steering
         self._set_state(initial_state)
         self._task = asyncio.create_task(self._watch(awaitable))
-
-    def queue_message(
-        self,
-        message: str,
-        *,
-        delivery: Literal["steering", "follow_up"] = "steering",
-    ) -> Literal["steering", "follow_up"]:
-        """Queue input without starting a second concurrent Agent run."""
-        text = message.strip()
-        if not text:
-            raise ValueError("queued message must not be empty")
-        if delivery == "steering" and self._accepts_steering:
-            self._steering_messages.append(text)
-            queued_as: Literal["steering", "follow_up"] = "steering"
-        else:
-            self._follow_up_messages.append(text)
-            queued_as = "follow_up"
-        self._notify()
-        return queued_as
-
-    def take_steering_message(self) -> str | None:
-        """Return one message at the next safe ReAct turn boundary."""
-        if not self._steering_messages:
-            return None
-        message = self._steering_messages.popleft()
-        self._notify()
-        return message
-
-    def take_pending_messages(self) -> list[str]:
-        """Return undelivered input so the REPL can restore it after failure/cancel."""
-        messages = [*self._steering_messages, *self._follow_up_messages]
-        self._steering_messages.clear()
-        self._follow_up_messages.clear()
-        return messages
 
     def set_phase(self, phase: str) -> None:
         if self.cancelling:
@@ -309,7 +261,7 @@ class InteractiveTaskController:
                 elif hasattr(awaitable, "close"):
                     awaitable.close()  # type: ignore[attr-defined]
                 raise TaskCancelledError
-            await self._run_sequence(awaitable)
+            await awaitable
         except (TaskCancelledError, asyncio.CancelledError):
             self._set_state(TaskState.CANCELLED)
         except Exception as exc:  # noqa: BLE001 - task boundary retains ordinary failures
@@ -339,29 +291,6 @@ class InteractiveTaskController:
         self._approval_future = None
         self._approval_request = None
         self._notify()
-
-    async def _run_sequence(self, first: Awaitable[None]) -> None:
-        """Run one foreground request, then queued follow-ups serially."""
-        await first
-        while not self._cancel_requested:
-            if self._follow_up_runner is None:
-                return
-            message = self._next_follow_up()
-            if message is None:
-                return
-            self.label = message
-            self._accepts_steering = True
-            self._set_state(TaskState.RUNNING)
-            await self._follow_up_runner(message)
-
-    def _next_follow_up(self) -> str | None:
-        # A steering message can arrive just after the final safe turn boundary.
-        # Preserve it by executing it before explicit follow-ups.
-        if self._steering_messages:
-            return self._steering_messages.popleft()
-        if self._follow_up_messages:
-            return self._follow_up_messages.popleft()
-        return None
 
     def _promote_next_approval(self) -> None:
         if self._approval_future is not None and not self._approval_future.done():

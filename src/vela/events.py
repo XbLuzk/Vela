@@ -26,7 +26,6 @@ AgentEventType = Literal[
     "plan_task_started",
     "run_finished",
     "run_started",
-    "steering_applied",
     "text_delta",
     "thinking_delta",
     "tool_call",

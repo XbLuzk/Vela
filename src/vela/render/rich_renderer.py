@@ -45,7 +45,6 @@ class RichRenderer:
         self._thinking_scope: str | None = None
         self._live_markdown = live_markdown
         self._live: Live | None = None
-        self._thinking_live: Live | None = None
         self._context_window = context_window or 0
         self._input_tokens = 0
         self._output_tokens = 0
@@ -64,7 +63,6 @@ class RichRenderer:
         self._thinking_buffer.clear()
         self._thinking_scope = None
         self._stop_live_markdown()
-        self._stop_live_thinking()
         self._input_tokens = 0
         self._output_tokens = 0
         self._last_input_tokens = 0
@@ -110,7 +108,6 @@ class RichRenderer:
         elif event_type in {
             "run_started",
             "usage",
-            "steering_applied",
             "error",
             "done",
             "run_finished",
@@ -130,7 +127,6 @@ class RichRenderer:
             self._thinking_scope = scope
             thinking = str(event.get("thinking") or "")
             self._thinking_buffer.append(thinking)
-            self._update_live_thinking()
         else:
             stop_reason = str(event.get("stop_reason") or "end_turn")
             title = "Assistant Output" if stop_reason == "tool_use" else "Final Output"
@@ -169,8 +165,6 @@ class RichRenderer:
             self._current_run_id = str(event.get("run_id") or "")
         elif event_type == "usage":
             self._record_usage(event.get("usage") or {})
-        elif event_type == "steering_applied":
-            self.console.print(Text("Steering message applied", style="dim"))
         elif event_type == "error":
             self._flush_thinking()
             self._flush_markdown(title="Assistant Output")
@@ -238,7 +232,6 @@ class RichRenderer:
         self._thinking_buffer.clear()
         scope = self._thinking_scope
         self._thinking_scope = None
-        self._stop_live_thinking()
         if text.strip():
             self.console.print(
                 _output_panel(
@@ -247,38 +240,6 @@ class RichRenderer:
                     border_style=RICH_STYLE_RULES["thinking_border"],
                 )
             )
-
-    def _update_live_thinking(self) -> None:
-        if not self.console.is_terminal:
-            return
-        text = "".join(self._thinking_buffer)
-        if not text.strip():
-            return
-        renderable = _output_panel(
-            Text(text, style="dim"),
-            title=Text(
-                _thinking_title(self._thinking_scope),
-                style=RICH_STYLE_RULES["thinking"],
-            ),
-            border_style=RICH_STYLE_RULES["thinking_border"],
-        )
-        if self._thinking_live is None:
-            self._thinking_live = Live(
-                renderable,
-                console=self.console,
-                refresh_per_second=12,
-                transient=True,
-                vertical_overflow="visible",
-            )
-            self._thinking_live.start(refresh=True)
-            return
-        self._thinking_live.update(renderable, refresh=True)
-
-    def _stop_live_thinking(self) -> None:
-        if self._thinking_live is None:
-            return
-        self._thinking_live.stop()
-        self._thinking_live = None
 
     def _record_usage(self, usage: dict[str, Any]) -> None:
         input_tokens = int(usage.get("input_tokens") or 0)

@@ -28,9 +28,8 @@
 4. `ToolExecutor` 负责并发只读工具、串行写工具、HITL 和工具 Journal。
 5. 工具结果写回消息历史，下一轮模型调用继续处理。
 
-运行中输入由 `InteractiveTaskController` 按 steering 和 follow-up 分队列保存；它还统一编排
-任务生命周期、工具审批、Plan 确认和串行 follow-up。ReAct 只在一次模型回复和工具调用都结束后
-取一条 steering，避免改写正在执行的轮次；follow-up 在前一请求完成后启动，不会创建并发 Agent。
+`InteractiveTaskController` 统一编排任务生命周期、工具审批、Plan 确认和取消。一个终端同一时间只
+运行一个 Agent 请求；任务运行期间提交的普通消息会被拒绝，不创建隐式队列或并发 Agent。
 
 这条普通 ReAct 链路不依赖高层 Agent 框架，因此可以直接看到循环条件、消息变化和异常出口。
 
