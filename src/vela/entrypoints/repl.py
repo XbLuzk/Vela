@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from rich.console import Console
@@ -180,6 +182,95 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
             active_session.close()
             print_session_warning(console, active_session)
             return
+        if task_controller.active and await _wait_for_active_task(session, runtime):
+            active_session.close()
+            print_session_warning(console, active_session)
+            return
+
+
+async def _wait_for_active_task(session: PromptSession, runtime: ReplRuntime) -> bool:
+    """Wait for completion, opening the input box only for required interaction."""
+    controller = runtime.task_controller
+    revision = controller.change_revision
+    while controller.active:
+        if controller.awaiting_approval or controller.awaiting_plan_review:
+            try:
+                answer = await session.prompt_async()
+            except KeyboardInterrupt:
+                controller.request_cancel()
+                continue
+            except EOFError:
+                controller.request_cancel()
+                await controller.wait()
+                return True
+            if await _dispatch_message(answer.strip(), runtime):
+                return True
+            revision = controller.change_revision
+            continue
+        action, revision = await _wait_for_task_signal(session, controller, revision)
+        if action == "cancel":
+            if controller.request_cancel():
+                runtime.console.print(
+                    "[yellow]正在取消当前任务；再次 Ctrl+C 将退出 Vela。[/yellow]"
+                )
+        elif action == "exit":
+            controller.request_cancel()
+            await controller.wait()
+            return True
+    return False
+
+
+async def _wait_for_task_signal(
+    session: PromptSession,
+    controller: InteractiveTaskController,
+    revision: int,
+) -> tuple[Literal["changed", "cancel", "exit"], int]:
+    """Wait without rendering a second prompt while still accepting cancel keys."""
+    loop = asyncio.get_running_loop()
+    key_action: asyncio.Future[Literal["cancel", "exit"]] = loop.create_future()
+    flush_handle: asyncio.TimerHandle | None = None
+
+    def consume_keys(key_presses) -> None:
+        for key_press in key_presses:
+            if key_action.done():
+                return
+            if key_press.key == Keys.Escape:
+                key_action.set_result("cancel")
+            elif key_press.key in {Keys.ControlC, Keys.SIGINT}:
+                key_action.set_result("exit" if controller.cancelling else "cancel")
+            elif key_press.key == Keys.ControlD:
+                key_action.set_result("exit")
+
+    def flush_keys() -> None:
+        consume_keys(session.app.input.flush_keys())
+
+    def read_keys() -> None:
+        nonlocal flush_handle
+        consume_keys(session.app.input.read_keys())
+        if not key_action.done():
+            if flush_handle is not None:
+                flush_handle.cancel()
+            flush_handle = loop.call_later(0.05, flush_keys)
+
+    change_task = asyncio.create_task(controller.wait_for_change(revision))
+    try:
+        with session.app.input.raw_mode(), session.app.input.attach(read_keys):
+            done, _pending = await asyncio.wait(
+                {change_task, key_action},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+    finally:
+        if flush_handle is not None:
+            flush_handle.cancel()
+        if not change_task.done():
+            change_task.cancel()
+        if not key_action.done():
+            key_action.cancel()
+        await asyncio.gather(change_task, return_exceptions=True)
+
+    if key_action in done and not key_action.cancelled():
+        return key_action.result(), controller.change_revision
+    return "changed", change_task.result()
 
 
 async def _dispatch_message(

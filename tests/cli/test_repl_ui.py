@@ -7,15 +7,16 @@ from io import StringIO
 from prompt_toolkit import PromptSession
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.keys import Keys
+from prompt_toolkit.layout.containers import HSplit, VSplit, Window
 from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 
 from vela.config import load_config
 from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
+    BorderedPromptSession,
     PermissionModeController,
     bottom_toolbar,
-    input_border_float,
     permission_key_bindings,
     prompt_message,
 )
@@ -28,15 +29,18 @@ def test_repl_palette_follows_terminal_theme():
     assert all("#" not in style for style in REPL_STYLE_RULES.values())
 
 
-def test_input_border_is_a_layout_float_below_the_cursor():
-    border = input_border_float()
+def test_input_border_is_part_of_layout_flow():
+    session = BorderedPromptSession(output=DummyOutput())
+    container = session.app.layout.container
 
-    assert border.ycursor
-    assert border.left == 2
-    assert border.right == 1
-    assert border.height == 1
-    assert border.content.char == "─"
-    assert border.content.style == "class:input.rule"
+    assert isinstance(container, HSplit)
+    border = container.children[-1]
+    assert isinstance(border, VSplit)
+    assert len(border.children) == 3
+    rule = border.children[1]
+    assert isinstance(rule, Window)
+    assert rule.char == "─"
+    assert rule.style == "class:input.rule"
     assert "bottom-toolbar" not in REPL_STYLE_RULES
 
 

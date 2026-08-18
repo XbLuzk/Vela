@@ -12,7 +12,7 @@ from typing import Any, Literal
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout.containers import Float, FloatContainer, Window
+from prompt_toolkit.layout.containers import HSplit, VSplit, Window
 from rich.console import Console
 
 from vela.config import VelaConfig
@@ -75,10 +75,7 @@ class BorderedPromptSession(PromptSession):
 
     def _create_layout(self):
         layout = super()._create_layout()
-        layout.container = FloatContainer(
-            content=layout.container,
-            floats=[input_border_float()],
-        )
+        layout.container = HSplit([layout.container, input_border_row()])
         return layout
 
 
@@ -213,13 +210,15 @@ def bottom_toolbar(
     return toolbar
 
 
-def input_border_float() -> Float:
-    return Float(
-        content=Window(char="─", style="class:input.rule"),
-        left=2,
-        right=1,
+def input_border_row() -> VSplit:
+    """Keep the input rule inside Prompt Toolkit's measured layout."""
+    return VSplit(
+        [
+            Window(width=2),
+            Window(char="─", style="class:input.rule"),
+            Window(width=1),
+        ],
         height=1,
-        ycursor=True,
     )
 
 
