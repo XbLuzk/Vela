@@ -75,6 +75,50 @@ def test_load_skill_pushes_body_into_context_buffer(tmp_path, monkeypatch):
     assert "demo body" in drained
 
 
+def test_load_skill_is_idempotent_within_one_tool_context(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    _write_skill(tmp_path / ".vela" / "skills", "demo", "demo desc", "v1", body="demo body")
+    config = load_config(project_root=tmp_path)
+    buffer = SkillContextBuffer()
+    context = ToolContext(cwd=str(tmp_path), config=config, skill_context_buffer=buffer)
+
+    first = asyncio.run(_load_skill({"name": "demo"}, context))
+    first_context = buffer.drain()
+    second = asyncio.run(_load_skill({"name": "demo"}, context))
+
+    assert not first.is_error
+    assert "Loaded Skill: demo" in first_context
+    assert not second.is_error
+    assert second.content == 'Skill "demo" is already loaded for this run.'
+    assert buffer.drain() == ""
+
+
+def test_load_skill_can_be_loaded_again_in_a_new_tool_context(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    _write_skill(tmp_path / ".vela" / "skills", "demo", "demo desc", "v1", body="demo body")
+    config = load_config(project_root=tmp_path)
+    first_buffer = SkillContextBuffer()
+    second_buffer = SkillContextBuffer()
+
+    first = asyncio.run(
+        _load_skill(
+            {"name": "demo"},
+            ToolContext(cwd=str(tmp_path), config=config, skill_context_buffer=first_buffer),
+        )
+    )
+    second = asyncio.run(
+        _load_skill(
+            {"name": "demo"},
+            ToolContext(cwd=str(tmp_path), config=config, skill_context_buffer=second_buffer),
+        )
+    )
+
+    assert not first.is_error
+    assert not second.is_error
+    assert "Loaded Skill: demo" in first_buffer.drain()
+    assert "Loaded Skill: demo" in second_buffer.drain()
+
+
 def test_skill_matcher_ranks_explicit_names_and_chinese_english_terms(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     project = tmp_path / "project"

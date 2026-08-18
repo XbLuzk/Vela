@@ -30,6 +30,7 @@ class ToolContext:
         None
     )
     skill_context_buffer: Any | None = None
+    loaded_skill_names: set[str] = field(default_factory=set)
     execution_scope: str | None = None
     allow_uncertain_retry: bool = False
     tool_sequence: int = 0
