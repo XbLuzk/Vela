@@ -10,9 +10,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.filters import to_filter
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout.containers import HSplit, VSplit, Window
+from prompt_toolkit.layout.containers import (
+    ConditionalContainer,
+    FloatContainer,
+    HSplit,
+    VerticalAlign,
+    VSplit,
+    Window,
+)
 from rich.console import Console
 
 from vela.config import VelaConfig
@@ -73,9 +81,29 @@ class PermissionModeController:
 class BorderedPromptSession(PromptSession):
     """Prompt Toolkit session with a stable bordered input area."""
 
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("reserve_space_for_menu", 0)
+        super().__init__(*args, **kwargs)
+
     def _create_layout(self):
         layout = super()._create_layout()
-        layout.container = HSplit([layout.container, input_border_row()])
+        root = layout.container
+        if not isinstance(root, HSplit):
+            raise RuntimeError("Unsupported Prompt Toolkit layout")
+        main_section = root.children[0]
+        if not isinstance(main_section, ConditionalContainer):
+            raise RuntimeError("Unsupported Prompt Toolkit input section")
+        main_input = main_section.alternative_content
+        if not isinstance(main_input, FloatContainer):
+            raise RuntimeError("Unsupported Prompt Toolkit input container")
+        input_stack = main_input.content
+        if not isinstance(input_stack, HSplit):
+            raise RuntimeError("Unsupported Prompt Toolkit input stack")
+        input_stack.align = VerticalAlign.TOP
+        for child in input_stack.children:
+            if isinstance(child, ConditionalContainer) and isinstance(child.content, Window):
+                child.content.dont_extend_height = to_filter(True)
+        input_stack.children.append(input_border_row())
         return layout
 
 

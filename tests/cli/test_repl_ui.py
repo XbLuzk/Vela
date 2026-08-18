@@ -7,7 +7,14 @@ from io import StringIO
 from prompt_toolkit import PromptSession
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout.containers import HSplit, VSplit, Window
+from prompt_toolkit.layout.containers import (
+    ConditionalContainer,
+    FloatContainer,
+    HSplit,
+    VerticalAlign,
+    VSplit,
+    Window,
+)
 from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 
@@ -29,12 +36,29 @@ def test_repl_palette_follows_terminal_theme():
     assert all("#" not in style for style in REPL_STYLE_RULES.values())
 
 
-def test_input_border_is_part_of_layout_flow():
+def test_input_border_is_inside_the_main_input_stack():
     session = BorderedPromptSession(output=DummyOutput())
-    container = session.app.layout.container
+    root = session.app.layout.container
 
-    assert isinstance(container, HSplit)
-    border = container.children[-1]
+    assert session.reserve_space_for_menu == 0
+    assert isinstance(root, HSplit)
+    main_section = root.children[0]
+    assert isinstance(main_section, ConditionalContainer)
+    main_input = main_section.alternative_content
+    assert isinstance(main_input, FloatContainer)
+    input_stack = main_input.content
+    assert isinstance(input_stack, HSplit)
+    assert input_stack.align == VerticalAlign.TOP
+
+    input_windows = [
+        child.content
+        for child in input_stack.children
+        if isinstance(child, ConditionalContainer) and isinstance(child.content, Window)
+    ]
+    assert input_windows
+    assert all(window.dont_extend_height() for window in input_windows)
+
+    border = input_stack.children[-1]
     assert isinstance(border, VSplit)
     assert len(border.children) == 3
     rule = border.children[1]
