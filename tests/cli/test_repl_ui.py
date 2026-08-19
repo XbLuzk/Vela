@@ -26,6 +26,7 @@ from vela.entrypoints.repl_ui import (
     bottom_toolbar,
     permission_key_bindings,
     prompt_message,
+    prompt_status,
 )
 from vela.image import ClipboardImageResult
 from vela.task_control import InteractiveTaskController, TaskState
@@ -68,8 +69,8 @@ def test_input_border_is_inside_the_main_input_stack():
     assert "bottom-toolbar" not in REPL_STYLE_RULES
 
 
-def test_prompt_message_keeps_status_and_input_together():
-    prompt = prompt_message(
+def test_status_is_separate_from_the_redrawn_input_prompt():
+    status = prompt_status(
         cwd="/tmp/project",
         model="deepseek-v4-flash",
         tools=12,
@@ -78,17 +79,18 @@ def test_prompt_message_keeps_status_and_input_together():
         skills=3,
         stats={"total_tokens": 13187, "context_ratio": 0.013, "has_usage": True},
     )
-    plain = "".join(text for _style, text in prompt)
+    status_text = "".join(text for _style, text in status)
+    prompt_text = "".join(text for _style, text in prompt_message())
 
-    assert "2 AGENTS.md files" in plain
-    assert "1 MCP server" in plain
-    assert "3 skills · Tools 12" in plain
-    assert "Default  Shift+Tab" in plain
-    assert "deepseek-v4-flash" in plain
-    assert "█░░░░░░░░░░░ 1%" in plain
-    assert "/tmp/project" in plain
-    assert "\n\n* " in plain
-    assert plain.endswith("\n* ")
+    assert "2 AGENTS.md files" in status_text
+    assert "1 MCP server" in status_text
+    assert "3 skills · Tools 12" in status_text
+    assert "Default  Shift+Tab" in status_text
+    assert "deepseek-v4-flash" in status_text
+    assert "█░░░░░░░░░░░ 1%" in status_text
+    assert "/tmp/project" in status_text
+    assert "* " not in status_text
+    assert prompt_text == "* "
 
 
 def test_permission_mode_toggle_applies_and_restores_full_access_policy(tmp_path):
@@ -127,11 +129,87 @@ def test_escape_is_bound_to_running_task_cancel(tmp_path):
     assert any(binding.keys == (Keys.Escape,) for binding in bindings.bindings)
 
 
-def test_running_task_ignores_whitespace_only_space_spam(tmp_path):
+def test_running_task_keeps_draft_but_blocks_submit_until_completion(tmp_path):
     permission = PermissionModeController(load_config(project_root=tmp_path))
     task_controller = InteractiveTaskController()
 
-    async def run_prompt() -> tuple[str, str]:
+    async def run_prompt() -> tuple[bool, str, str]:
+        with create_pipe_input() as pipe_input:
+            session = PromptSession(
+                input=pipe_input,
+                output=DummyOutput(),
+                key_bindings=permission_key_bindings(permission, task_controller),
+            )
+
+            release_task = asyncio.Event()
+
+            async def keep_running() -> None:
+                await release_task.wait()
+
+            task_controller.start(
+                keep_running(),
+                initial_state=TaskState.RUNNING,
+                label="active task",
+            )
+            prompt = asyncio.create_task(session.prompt_async())
+            pipe_input.send_text("next task\r")
+            await asyncio.sleep(0.05)
+            submitted_while_running = prompt.done()
+            buffered_draft = session.default_buffer.text
+            release_task.set()
+            await task_controller.wait()
+            pipe_input.send_text("\r")
+            result = await prompt
+            return submitted_while_running, buffered_draft, result
+
+    submitted_while_running, buffered_draft, result = asyncio.run(run_prompt())
+
+    assert not submitted_while_running
+    assert buffered_draft == "next task"
+    assert result == "next task"
+
+
+def test_running_task_blocks_enter_that_was_buffered_before_prompt_started(tmp_path):
+    permission = PermissionModeController(load_config(project_root=tmp_path))
+    task_controller = InteractiveTaskController()
+
+    async def run_prompt() -> tuple[bool, str]:
+        with create_pipe_input() as pipe_input:
+            session = PromptSession(
+                input=pipe_input,
+                output=DummyOutput(),
+                key_bindings=permission_key_bindings(permission, task_controller),
+            )
+
+            async def keep_running() -> None:
+                await asyncio.Event().wait()
+
+            task_controller.start(
+                keep_running(),
+                initial_state=TaskState.RUNNING,
+                label="active task",
+            )
+            pipe_input.send_text("next task\r")
+            prompt = asyncio.create_task(session.prompt_async())
+            await asyncio.sleep(0.05)
+            result = prompt.done(), session.default_buffer.text
+            prompt.cancel()
+            await asyncio.gather(prompt, return_exceptions=True)
+            task_controller.request_cancel()
+            await task_controller.wait()
+            return result
+
+    submitted, draft = asyncio.run(run_prompt())
+
+    assert not submitted
+    assert draft == "next task"
+
+
+def test_running_task_still_allows_cancel_command(tmp_path):
+    permission = PermissionModeController(load_config(project_root=tmp_path))
+    task_controller = InteractiveTaskController()
+
+    async def run_prompt() -> str:
         with create_pipe_input() as pipe_input:
             session = PromptSession(
                 input=pipe_input,
@@ -148,19 +226,79 @@ def test_running_task_ignores_whitespace_only_space_spam(tmp_path):
                 label="active task",
             )
             prompt = asyncio.create_task(session.prompt_async())
-            pipe_input.send_text("        ")
-            await asyncio.sleep(0.05)
-            buffered_after_spam = session.default_buffer.text
-            pipe_input.send_text("hello world\r")
+            pipe_input.send_text("/cancel\r")
             result = await prompt
             task_controller.request_cancel()
             await task_controller.wait()
-            return buffered_after_spam, result
+            return result
 
-    buffered_after_spam, result = asyncio.run(run_prompt())
+    assert asyncio.run(run_prompt()) == "/cancel"
 
-    assert buffered_after_spam == ""
-    assert result == "hello world"
+
+def test_running_task_allows_tool_approval_response(tmp_path):
+    permission = PermissionModeController(load_config(project_root=tmp_path))
+    task_controller = InteractiveTaskController()
+    approval_result = ""
+
+    async def run_prompt() -> str:
+        nonlocal approval_result
+        with create_pipe_input() as pipe_input:
+            session = PromptSession(
+                input=pipe_input,
+                output=DummyOutput(),
+                key_bindings=permission_key_bindings(permission, task_controller),
+            )
+
+            async def await_approval() -> None:
+                nonlocal approval_result
+                approval_result = await task_controller.request_approval(
+                    {"tool_name": "write_file", "danger_level": "write", "input": {}}
+                )
+
+            task_controller.start(
+                await_approval(),
+                initial_state=TaskState.RUNNING,
+                label="approval task",
+            )
+            while not task_controller.awaiting_approval:
+                await asyncio.sleep(0)
+            prompt = asyncio.create_task(session.prompt_async())
+            pipe_input.send_text("y\r")
+            result = await prompt
+            task_controller.submit_approval(result)
+            await task_controller.wait()
+            return result
+
+    assert asyncio.run(run_prompt()) == "y"
+    assert approval_result == "approve"
+
+
+def test_running_task_allows_plan_review_response(tmp_path):
+    permission = PermissionModeController(load_config(project_root=tmp_path))
+    task_controller = InteractiveTaskController()
+
+    async def run_prompt() -> tuple[str, str]:
+        with create_pipe_input() as pipe_input:
+            session = PromptSession(
+                input=pipe_input,
+                output=DummyOutput(),
+                key_bindings=permission_key_bindings(permission, task_controller),
+            )
+
+            review = asyncio.create_task(task_controller.request_plan_review(object()))
+            while not task_controller.awaiting_plan_review:
+                await asyncio.sleep(0)
+            prompt = asyncio.create_task(session.prompt_async())
+            pipe_input.send_text("execute\r")
+            result = await prompt
+            message = task_controller.submit_plan_review(result)
+            decision = await review
+            return message, decision.action
+
+    message, action = asyncio.run(run_prompt())
+
+    assert "开始执行" in message
+    assert action == "execute"
 
 
 def test_ctrl_v_is_bound_to_clipboard_image(tmp_path):

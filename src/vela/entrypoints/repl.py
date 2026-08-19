@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from prompt_toolkit import PromptSession
+from prompt_toolkit import PromptSession, print_formatted_text
 from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.keys import Keys
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from rich.console import Console
@@ -28,6 +28,8 @@ from vela.entrypoints.repl_ui import (
     PermissionModeController,
     permission_key_bindings,
     prompt_message,
+    prompt_placeholder,
+    prompt_status,
 )
 from vela.llm import create_llm_client
 from vela.render import RichRenderer
@@ -51,6 +53,7 @@ class ReplRuntime:
     renderer: RichRenderer
     active_session: ActiveSession
     task_controller: InteractiveTaskController
+    status_provider: Callable[[], list[tuple[str, str]]] | None = None
 
 
 # Startup ---------------------------------------------------------------------
@@ -102,8 +105,9 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
 
     history_path = Path.home() / ".vela" / "history" / "prompt_history.txt"
     history_path.parent.mkdir(parents=True, exist_ok=True)
-    session = BorderedPromptSession(
-        message=lambda: prompt_message(
+
+    def status_provider() -> list[tuple[str, str]]:
+        return prompt_status(
             cwd=cwd,
             model=agent.llm_client.model_name,
             tools=tool_count,
@@ -113,11 +117,15 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
             stats=renderer.toolbar_status(),
             permission_mode=permission_mode.mode,
             task_state=task_controller.state,
-        ),
+        )
+
+    repl_style = Style.from_dict(REPL_STYLE_RULES)
+    session = BorderedPromptSession(
+        message=prompt_message(),
         history=FileHistory(str(history_path)),
         completer=WordCompleter(SLASH_COMMANDS, ignore_case=True),
-        placeholder=[("class:placeholder", "Type a message, @image:<path>, or Ctrl+V")],
-        style=Style.from_dict(REPL_STYLE_RULES),
+        placeholder=lambda: prompt_placeholder(task_controller),
+        style=repl_style,
         key_bindings=permission_key_bindings(
             permission_mode,
             task_controller,
@@ -139,6 +147,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         renderer=renderer,
         active_session=active_session,
         task_controller=task_controller,
+        status_provider=status_provider,
     )
 
     with patch_stdout(raw=True):
@@ -152,10 +161,16 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
     console = runtime.console
     active_session = runtime.active_session
     task_controller = runtime.task_controller
+    draft = ""
+    show_status = True
     while True:
+        if show_status:
+            _print_prompt_status(session, runtime)
         try:
-            user_input = await session.prompt_async()
+            user_input = await session.prompt_async(default=draft)
         except KeyboardInterrupt:
+            draft = ""
+            show_status = True
             if task_controller.cancelling:
                 await task_controller.wait()
                 active_session.close()
@@ -178,99 +193,36 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
             console.print()
             return
         message = user_input.strip()
+        if _should_hold_draft(message, task_controller):
+            draft = user_input
+            show_status = False
+            continue
+        draft = ""
+        show_status = True
         if await _dispatch_message(message, runtime):
             active_session.close()
             print_session_warning(console, active_session)
             return
-        if task_controller.active and await _wait_for_active_task(session, runtime):
-            active_session.close()
-            print_session_warning(console, active_session)
-            return
 
 
-async def _wait_for_active_task(session: PromptSession, runtime: ReplRuntime) -> bool:
-    """Wait for completion, opening the input box only for required interaction."""
-    controller = runtime.task_controller
-    revision = controller.change_revision
-    while controller.active:
-        if controller.awaiting_approval or controller.awaiting_plan_review:
-            try:
-                answer = await session.prompt_async()
-            except KeyboardInterrupt:
-                controller.request_cancel()
-                continue
-            except EOFError:
-                controller.request_cancel()
-                await controller.wait()
-                return True
-            if await _dispatch_message(answer.strip(), runtime):
-                return True
-            revision = controller.change_revision
-            continue
-        action, revision = await _wait_for_task_signal(session, controller, revision)
-        if action == "cancel":
-            if controller.request_cancel():
-                runtime.console.print(
-                    "[yellow]正在取消当前任务；再次 Ctrl+C 将退出 Vela。[/yellow]"
-                )
-        elif action == "exit":
-            controller.request_cancel()
-            await controller.wait()
-            return True
-    return False
+def _should_hold_draft(message: str, controller: InteractiveTaskController) -> bool:
+    return (
+        controller.active
+        and not controller.awaiting_approval
+        and not controller.awaiting_plan_review
+        and message != "/cancel"
+    )
 
 
-async def _wait_for_task_signal(
-    session: PromptSession,
-    controller: InteractiveTaskController,
-    revision: int,
-) -> tuple[Literal["changed", "cancel", "exit"], int]:
-    """Wait without rendering a second prompt while still accepting cancel keys."""
-    loop = asyncio.get_running_loop()
-    key_action: asyncio.Future[Literal["cancel", "exit"]] = loop.create_future()
-    flush_handle: asyncio.TimerHandle | None = None
-
-    def consume_keys(key_presses) -> None:
-        for key_press in key_presses:
-            if key_action.done():
-                return
-            if key_press.key == Keys.Escape:
-                key_action.set_result("cancel")
-            elif key_press.key in {Keys.ControlC, Keys.SIGINT}:
-                key_action.set_result("exit" if controller.cancelling else "cancel")
-            elif key_press.key == Keys.ControlD:
-                key_action.set_result("exit")
-
-    def flush_keys() -> None:
-        consume_keys(session.app.input.flush_keys())
-
-    def read_keys() -> None:
-        nonlocal flush_handle
-        consume_keys(session.app.input.read_keys())
-        if not key_action.done():
-            if flush_handle is not None:
-                flush_handle.cancel()
-            flush_handle = loop.call_later(0.05, flush_keys)
-
-    change_task = asyncio.create_task(controller.wait_for_change(revision))
-    try:
-        with session.app.input.raw_mode(), session.app.input.attach(read_keys):
-            done, _pending = await asyncio.wait(
-                {change_task, key_action},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-    finally:
-        if flush_handle is not None:
-            flush_handle.cancel()
-        if not change_task.done():
-            change_task.cancel()
-        if not key_action.done():
-            key_action.cancel()
-        await asyncio.gather(change_task, return_exceptions=True)
-
-    if key_action in done and not key_action.cancelled():
-        return key_action.result(), controller.change_revision
-    return "changed", change_task.result()
+def _print_prompt_status(session: PromptSession, runtime: ReplRuntime) -> None:
+    if runtime.status_provider is None:
+        return
+    print_formatted_text(
+        FormattedText(runtime.status_provider()),
+        style=session.style,
+        output=session.app.output,
+        end="\n\n",
+    )
 
 
 async def _dispatch_message(

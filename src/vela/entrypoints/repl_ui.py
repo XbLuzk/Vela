@@ -114,7 +114,7 @@ def permission_key_bindings(
     console: Console | None = None,
     clipboard_grabber: Callable[[], ClipboardImageResult] = grab_clipboard_image,
 ) -> KeyBindings:
-    """Build the Space, Shift+Tab, Esc, Ctrl+V, and Enter shortcuts."""
+    """Build the Shift+Tab, Esc, Ctrl+V, and Enter shortcuts."""
 
     bindings = KeyBindings()
     clipboard_jobs: set[asyncio.Task[None]] = set()
@@ -124,24 +124,25 @@ def permission_key_bindings(
             await asyncio.gather(*tuple(clipboard_jobs), return_exceptions=True)
         if event.app.is_done:
             return
-        event.app.current_buffer.validate_and_handle()
+        buffer = event.app.current_buffer
+        if (
+            task_controller is not None
+            and task_controller.active
+            and not task_controller.awaiting_approval
+            and not task_controller.awaiting_plan_review
+            and buffer.text.strip() != "/cancel"
+        ):
+            return
+        buffer.validate_and_handle()
 
     @bindings.add(Keys.BackTab)
     def toggle_permission_mode(event) -> None:
         permission_mode.toggle()
         event.app.invalidate()
 
-    @bindings.add(" ")
-    def insert_space(event) -> None:
-        buffer = event.app.current_buffer
-        if task_controller is not None and task_controller.active and not buffer.text.strip():
-            return
-        buffer.insert_text(" ")
-
     @bindings.add(Keys.Escape)
     def cancel_running_task(event) -> None:
         if task_controller is not None and task_controller.request_cancel():
-            event.app.current_buffer.reset()
             event.app.invalidate()
 
     @bindings.add(Keys.ControlV)
@@ -169,7 +170,27 @@ def permission_key_bindings(
     return bindings
 
 
-def prompt_message(
+def prompt_message() -> list[tuple[str, str]]:
+    """Build the small editable prompt that can be safely redrawn."""
+
+    return [("class:prompt", "* ")]
+
+
+def prompt_placeholder(task_controller: InteractiveTaskController) -> list[tuple[str, str]]:
+    if task_controller.awaiting_approval:
+        text = "Approve tool: y / n / a / s"
+    elif task_controller.awaiting_plan_review:
+        text = "Plan review: execute / modify / cancel"
+    elif task_controller.cancelling:
+        text = "Cancelling current task..."
+    elif task_controller.active:
+        text = "Task running — draft the next message; Enter is disabled"
+    else:
+        text = "Type a message, @image:<path>, or Ctrl+V"
+    return [("class:placeholder", text)]
+
+
+def prompt_status(
     *,
     cwd: str,
     model: str,
@@ -181,7 +202,7 @@ def prompt_message(
     permission_mode: PermissionMode = "default",
     task_state: TaskState | None = None,
 ) -> list[tuple[str, str]]:
-    """Build the text shown above and beside the input cursor."""
+    """Build the status block printed once before each editable prompt."""
 
     return [
         ("class:prompt.count.agents", str(agents_files)),
@@ -199,8 +220,6 @@ def prompt_message(
             permission_mode=permission_mode,
             task_state=task_state,
         ),
-        ("class:prompt.dim", "\n\n"),
-        ("class:prompt", "* "),
     ]
 
 

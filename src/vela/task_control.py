@@ -83,8 +83,6 @@ class InteractiveTaskController:
         self._review_feedback_pending = False
         self._watch_started = False
         self._cancel_requested = False
-        self._change_revision = 0
-        self._change_event = asyncio.Event()
         self._on_change = on_change
         self._on_error = on_error
 
@@ -111,10 +109,6 @@ class InteractiveTaskController:
     @property
     def approval_request(self) -> dict[str, Any] | None:
         return self._approval_request
-
-    @property
-    def change_revision(self) -> int:
-        return self._change_revision
 
     def set_callbacks(
         self,
@@ -168,15 +162,6 @@ class InteractiveTaskController:
         if task is not None:
             await task
         return self.state
-
-    async def wait_for_change(self, revision: int) -> int:
-        """Wait until task state or an interactive request changes."""
-        while self._change_revision == revision:
-            self._change_event.clear()
-            if self._change_revision != revision:
-                break
-            await self._change_event.wait()
-        return self._change_revision
 
     async def request_plan_review(self, _plan: Any) -> PlanReviewDecision:
         loop = asyncio.get_running_loop()
@@ -338,7 +323,5 @@ class InteractiveTaskController:
         self._notify()
 
     def _notify(self) -> None:
-        self._change_revision += 1
-        self._change_event.set()
         if self._on_change is not None:
             self._on_change()

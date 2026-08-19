@@ -5,9 +5,7 @@ from io import StringIO
 from types import SimpleNamespace
 
 import pytest
-from prompt_toolkit import PromptSession
-from prompt_toolkit.input import create_pipe_input
-from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.formatted_text import FormattedText
 from rich.console import Console
 
 import vela.agent.agent as agent_module
@@ -388,7 +386,7 @@ def test_ctrl_c_first_cancels_running_task_and_second_exits(tmp_path):
         def __init__(self):
             self.calls = 0
 
-        async def prompt_async(self):
+        async def prompt_async(self, **_kwargs):
             self.calls += 1
             raise KeyboardInterrupt
 
@@ -419,7 +417,7 @@ def test_ctrl_c_first_cancels_running_task_and_second_exits(tmp_path):
     assert "再次 Ctrl+C" in console.file.getvalue()
 
 
-def test_repl_waits_for_running_task_before_opening_next_prompt(tmp_path, monkeypatch):
+def test_repl_opens_the_next_draft_prompt_while_task_is_running(tmp_path, monkeypatch):
     store = SessionStore(tmp_path / "sessions.db")
     active = ActiveSession.open(tmp_path / "project", store=store)
     controller = InteractiveTaskController()
@@ -429,15 +427,17 @@ def test_repl_waits_for_running_task_before_opening_next_prompt(tmp_path, monkey
     second_prompt_started = asyncio.Event()
 
     class RecordingSession:
-        def __init__(self, app):
-            self.app = app
+        def __init__(self):
             self.calls = 0
 
-        async def prompt_async(self):
+        async def prompt_async(self, **_kwargs):
             self.calls += 1
             if self.calls == 1:
                 return "hello"
             second_prompt_started.set()
+            await release_task.wait()
+            while controller.active:
+                await asyncio.sleep(0)
             raise EOFError
 
     async def block_agent(*_args, **_kwargs):
@@ -447,141 +447,106 @@ def test_repl_waits_for_running_task_before_opening_next_prompt(tmp_path, monkey
     monkeypatch.setattr(repl, "run_agent_with_session", block_agent)
 
     async def run() -> tuple[bool, bool, int]:
-        with create_pipe_input() as pipe_input:
-            app = PromptSession(input=pipe_input, output=DummyOutput()).app
-            prompt_session = RecordingSession(app)
-            runtime = _repl_runtime(
-                tmp_path / "project",
-                active,
-                _FakeAgent(),
-                console,
-                task_controller=controller,
-            )
-            repl_task = asyncio.create_task(_repl_loop(prompt_session, runtime))
-            await asyncio.sleep(0.05)
-            observed = task_started.is_set(), second_prompt_started.is_set()
-            release_task.set()
-            await repl_task
-            return observed[0], observed[1], prompt_session.calls
+        prompt_session = RecordingSession()
+        runtime = _repl_runtime(
+            tmp_path / "project",
+            active,
+            _FakeAgent(),
+            console,
+            task_controller=controller,
+        )
+        repl_task = asyncio.create_task(_repl_loop(prompt_session, runtime))
+        await asyncio.sleep(0.05)
+        observed = task_started.is_set(), second_prompt_started.is_set()
+        release_task.set()
+        await repl_task
+        return observed[0], observed[1], prompt_session.calls
 
     started_before_release, prompted_before_release, prompt_calls = asyncio.run(run())
 
     assert started_before_release
-    assert not prompted_before_release
+    assert prompted_before_release
     assert prompt_calls == 2
     assert controller.state == TaskState.COMPLETED
 
 
-def test_active_task_waiter_observes_the_task_done_transition():
-    controller = InteractiveTaskController()
-
-    async def finish_immediately():
-        return None
-
-    async def run() -> None:
-        controller.start(
-            finish_immediately(),
-            initial_state=TaskState.RUNNING,
-            label="short task",
-        )
-        revision = controller.change_revision
-        while controller.active:
-            revision = await asyncio.wait_for(
-                controller.wait_for_change(revision),
-                timeout=1,
-            )
-
-    asyncio.run(run())
-
-    assert not controller.active
-    assert controller.state == TaskState.COMPLETED
-
-
-@pytest.mark.parametrize("cancel_key", ["\x03", "\x1b"])
-def test_running_task_accepts_cancel_keys_without_rendering_another_prompt(tmp_path, cancel_key):
+def test_repl_keeps_typeahead_draft_when_two_messages_arrive_together(tmp_path, monkeypatch):
     store = SessionStore(tmp_path / "sessions.db")
     active = ActiveSession.open(tmp_path / "project", store=store)
     controller = InteractiveTaskController()
     console = Console(file=StringIO(), color_system=None)
+    task_started = asyncio.Event()
 
-    async def never_finishes():
+    class TypeaheadSession:
+        def __init__(self):
+            self.calls = 0
+            self.restored_draft = ""
+            self.draft_restored = asyncio.Event()
+
+        async def prompt_async(self, *, default=""):
+            self.calls += 1
+            if self.calls == 1:
+                return "hello"
+            if self.calls == 2:
+                return "next task"
+            self.restored_draft = default
+            self.draft_restored.set()
+            await asyncio.Event().wait()
+
+    async def block_agent(*_args, **_kwargs):
+        task_started.set()
         await asyncio.Event().wait()
 
-    async def run() -> tuple[bool, int]:
-        with create_pipe_input() as pipe_input:
-            prompt_session = PromptSession(input=pipe_input, output=DummyOutput())
-            runtime = _repl_runtime(
-                tmp_path / "project",
-                active,
-                _FakeAgent(),
-                console,
-                task_controller=controller,
-            )
-            controller.start(
-                never_finishes(),
-                initial_state=TaskState.RUNNING,
-                label="long task",
-            )
-            waiter = asyncio.create_task(repl._wait_for_active_task(prompt_session, runtime))
-            await asyncio.sleep(0)
-            pipe_input.send_text(cancel_key)
-            should_exit = await asyncio.wait_for(waiter, timeout=1)
-            return should_exit, prompt_session.app.render_counter
+    monkeypatch.setattr(repl, "run_agent_with_session", block_agent)
 
-    should_exit, render_count = asyncio.run(run())
+    async def run() -> tuple[bool, str, str]:
+        prompt_session = TypeaheadSession()
+        runtime = _repl_runtime(
+            tmp_path / "project",
+            active,
+            _FakeAgent(),
+            console,
+            task_controller=controller,
+        )
+        repl_task = asyncio.create_task(_repl_loop(prompt_session, runtime))
+        await asyncio.wait_for(task_started.wait(), timeout=1)
+        await asyncio.wait_for(prompt_session.draft_restored.wait(), timeout=1)
+        result = controller.active, prompt_session.restored_draft, console.file.getvalue()
+        controller.request_cancel()
+        repl_task.cancel()
+        await asyncio.gather(repl_task, return_exceptions=True)
+        await controller.wait()
+        return result
 
-    assert not should_exit
-    assert render_count == 0
-    assert controller.state == TaskState.CANCELLED
+    active_while_drafting, draft, output = asyncio.run(run())
+
+    assert active_while_drafting
+    assert draft == "next task"
+    assert "当前任务仍在运行" not in output
 
 
-def test_running_task_opens_input_box_for_tool_approval(tmp_path):
+def test_prompt_status_is_printed_as_formatted_text(tmp_path, monkeypatch):
     store = SessionStore(tmp_path / "sessions.db")
     active = ActiveSession.open(tmp_path / "project", store=store)
-    controller = InteractiveTaskController()
     console = Console(file=StringIO(), color_system=None)
-    approval_result = ""
+    runtime = _repl_runtime(tmp_path / "project", active, _FakeAgent(), console)
+    runtime.status_provider = lambda: [("class:prompt", "status")]
+    session = SimpleNamespace(style="style", app=SimpleNamespace(output="output"))
+    captured = {}
 
-    async def request_approval():
-        nonlocal approval_result
-        approval_result = await controller.request_approval(
-            {"tool_name": "write_file", "danger_level": "write", "input": {}}
-        )
+    def capture(value, **kwargs):
+        captured["value"] = value
+        captured.update(kwargs)
 
-    class ApprovalSession:
-        def __init__(self, app):
-            self.app = app
-            self.calls = 0
+    monkeypatch.setattr(repl, "print_formatted_text", capture)
 
-        async def prompt_async(self):
-            self.calls += 1
-            return "y"
+    repl._print_prompt_status(session, runtime)
 
-    async def run() -> int:
-        with create_pipe_input() as pipe_input:
-            app = PromptSession(input=pipe_input, output=DummyOutput()).app
-            prompt_session = ApprovalSession(app)
-            runtime = _repl_runtime(
-                tmp_path / "project",
-                active,
-                _FakeAgent(),
-                console,
-                task_controller=controller,
-            )
-            controller.start(
-                request_approval(),
-                initial_state=TaskState.RUNNING,
-                label="approval task",
-            )
-            should_exit = await repl._wait_for_active_task(prompt_session, runtime)
-            assert not should_exit
-            return prompt_session.calls
-
-    prompt_calls = asyncio.run(run())
-
-    assert prompt_calls == 1
-    assert approval_result == "approve"
-    assert controller.state == TaskState.COMPLETED
+    assert isinstance(captured["value"], FormattedText)
+    assert list(captured["value"]) == [("class:prompt", "status")]
+    assert captured["style"] == "style"
+    assert captured["output"] == "output"
+    assert captured["end"] == "\n\n"
 
 
 def test_help_explains_cancel_plan_review_and_resume_contracts(tmp_path):
@@ -591,7 +556,7 @@ def test_help_explains_cancel_plan_review_and_resume_contracts(tmp_path):
 
     assert agent is not None
     assert "/cancel" in output
-    assert "Wait for completion or cancel before submitting another task" in output
+    assert "Draft while running; Enter unlocks after completion" in output
     assert "modify <requirement>" in output
     assert "/resume [id|number]" in output
     assert "Ctrl+C" in output

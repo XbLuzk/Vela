@@ -51,7 +51,7 @@ SLASH_COMMANDS = [
 INTERACTIVE_HELP = """\
 Task controls
   /cancel              Cancel the current Agent, tool, or Plan task
-  New task             Wait for completion or cancel before submitting another task
+  New task             Draft while running; Enter unlocks after completion
   Esc                   Cancel the current task
   Ctrl+C                Cancel once; press again while cancelling to exit Vela
   Ctrl+V                Save a macOS clipboard image and insert an @image reference
