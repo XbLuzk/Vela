@@ -47,10 +47,11 @@ def test_text_deltas_render_as_markdown_on_turn_complete():
     output = stream.getvalue()
     assert "Thinking" in output
     assert "需要先确认项目结构" in output
-    assert "Final Output" in output
+    assert "Final Output" not in output
     assert "Vela" in output
     assert "read_file" in output
     assert "网页搜索" in output
+    assert "╭" not in output
     assert "Run Summary" not in output
     assert "**Vela**" not in output
     assert "`read_file`" not in output
@@ -64,7 +65,7 @@ def test_text_deltas_render_as_markdown_on_turn_complete():
     assert stats["has_usage"] is True
 
 
-def test_interleaved_thinking_does_not_repeat_assistant_output_panels():
+def test_interleaved_thinking_keeps_one_compact_assistant_message():
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=120)
     renderer = RichRenderer(console=console)
@@ -75,9 +76,10 @@ def test_interleaved_thinking_does_not_repeat_assistant_output_panels():
     renderer.handle({"type": "turn_complete"})
 
     output = stream.getvalue()
-    assert output.count("Assistant Output") == 0
-    assert output.count("Final Output") == 1
+    assert "Assistant Output" not in output
+    assert "Final Output" not in output
     assert output.count("Thinking") == 1
+    assert output.count("●") == 1
     assert "第一段第二段" in output
 
 
@@ -128,7 +130,9 @@ def test_plan_status_and_scoped_thinking_render_with_task_identity():
     assert "检查模型配置" in output
     assert "Thinking · task_1" in output
     assert "读取配置文件" in output
-    assert "Tool Use · task_1" in output
+    assert "read_file · task_1" in output
+    assert "Tool Use" not in output
+    assert "╭" not in output
 
 
 def test_plan_review_flushes_plan_and_prints_choices():
@@ -155,7 +159,8 @@ def test_streaming_text_waits_for_turn_boundary_by_default():
 
     assert "Assistant Output" not in stream.getvalue()
     renderer.handle({"type": "turn_complete"})
-    assert stream.getvalue().count("Final Output") == 1
+    assert "chunk 1chunk 2" in stream.getvalue()
+    assert "Final Output" not in stream.getvalue()
 
 
 def test_streaming_thinking_waits_for_output_boundary_by_default():
@@ -171,7 +176,7 @@ def test_streaming_thinking_waits_for_output_boundary_by_default():
     assert stream.getvalue().count("Thinking") == 1
 
 
-def test_tool_use_and_result_render_as_structured_panels():
+def test_tool_use_and_result_render_as_compact_lines():
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=120)
     renderer = RichRenderer(console=console)
@@ -187,11 +192,12 @@ def test_tool_use_and_result_render_as_structured_panels():
     )
 
     output = stream.getvalue()
-    assert "Tool Use" in output
+    assert "Tool Use" not in output
+    assert "Tool Result" not in output
     assert "list_dir" in output
     assert '"path": "."' in output
-    assert "Tool Result · list_dir · ok" in output
-    assert "README.md" in output
+    assert "list_dir · ok · README.md src/" in output
+    assert "╭" not in output
 
 
 def test_replayed_tool_result_is_visible_to_user():
@@ -210,7 +216,81 @@ def test_replayed_tool_result_is_visible_to_user():
         }
     )
 
-    assert "Tool Result · write_file · ok · replayed" in stream.getvalue()
+    assert "write_file · ok · replayed · Wrote result.txt" in stream.getvalue()
+
+
+def test_long_tool_details_stay_on_single_lines():
+    stream = StringIO()
+    console = Console(file=stream, color_system=None, width=80)
+    renderer = RichRenderer(console=console)
+
+    renderer.handle(
+        {"type": "tool_call", "name": "search_memory", "input": {"query": "用户信息" * 80}}
+    )
+    renderer.handle(
+        {
+            "type": "tool_result",
+            "name": "search_memory",
+            "result": "搜索结果" * 100,
+            "is_error": False,
+        }
+    )
+
+    lines = stream.getvalue().splitlines()
+    assert len(lines) == 2
+    assert all(line.endswith("…") for line in lines)
+
+
+def test_long_thinking_is_collapsed_to_one_summary_line():
+    stream = StringIO()
+    console = Console(file=stream, color_system=None, width=200)
+    renderer = RichRenderer(console=console)
+
+    renderer.handle({"type": "thinking_delta", "thinking": "分析细节 " * 80})
+    renderer.handle({"type": "text_delta", "text": "结论"})
+    renderer.handle({"type": "turn_complete"})
+
+    output = stream.getvalue()
+    thinking_line = next(line for line in output.splitlines() if "Thinking" in line)
+    assert thinking_line.endswith("…")
+    assert len(thinking_line) < 190
+
+
+def test_run_finished_renders_compact_summary_and_only_keeps_failed_run_id():
+    stream = StringIO()
+    renderer = RichRenderer(console=Console(file=stream, color_system=None, width=120))
+
+    renderer.handle(
+        {
+            "type": "run_finished",
+            "trace": {
+                "run_id": "run_success123",
+                "status": "completed",
+                "duration_ms": 4020,
+                "turns": 2,
+                "tool_calls": 1,
+                "usage": {"total_tokens": 6513},
+            },
+        }
+    )
+    renderer.handle(
+        {
+            "type": "run_finished",
+            "trace": {
+                "run_id": "run_failed456",
+                "status": "failed",
+                "duration_ms": 500,
+                "turns": 0,
+                "tool_calls": 0,
+                "usage": {"total_tokens": 0},
+            },
+        }
+    )
+
+    output = stream.getvalue()
+    assert "✦ Completed in 4.02s · 2 turns · 1 tool · 6.5k tokens" in output
+    assert "success123" not in output
+    assert "✦ Failed in 0.50s · 0 turns · 0 tools · failed456" in output
 
 
 def test_start_run_resets_token_usage():

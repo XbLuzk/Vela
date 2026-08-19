@@ -19,13 +19,9 @@ RICH_STYLE_RULES = {
     "accent": "bold blue",
     "border": "bright_black",
     "thinking": "bold magenta",
-    "thinking_border": "magenta",
     "tool": "bold yellow",
-    "tool_border": "yellow",
     "success": "bold green",
-    "success_border": "green",
     "error": "bold red",
-    "error_border": "red",
     "logo": "bold blue",
     "identity": "bold",
 }
@@ -144,13 +140,13 @@ class RichRenderer:
         elif event_type == "plan_task_started":
             task_id = str(event.get("task_id") or "task")
             description = str(event.get("task_description") or "")
-            self.console.print(
-                _output_panel(
-                    Text(description),
-                    title=Text(f"Running {task_id}", style=RICH_STYLE_RULES["accent"]),
-                    border_style=RICH_STYLE_RULES["border"],
-                )
+            line = Text.assemble(
+                ("◆ ", RICH_STYLE_RULES["accent"]),
+                (f"Running {task_id}", RICH_STYLE_RULES["accent"]),
+                (" · ", "dim"),
+                (_compact_text(description, 500), "dim"),
             )
+            self._print_compact_line(line)
 
     def _handle_tool_event(self, event_type: str, event: AgentEvent) -> None:
         self._flush_thinking()
@@ -188,13 +184,7 @@ class RichRenderer:
         self._buffer.clear()
         self._stop_live_markdown()
         if text.strip():
-            self.console.print(
-                _output_panel(
-                    Markdown(text),
-                    title=Text(title, style=RICH_STYLE_RULES["accent"]),
-                    border_style=RICH_STYLE_RULES["border"],
-                )
-            )
+            self.console.print(_message_block(text, title=title))
 
     def _update_live_markdown(self) -> None:
         if not self._live_markdown or not self.console.is_terminal:
@@ -202,11 +192,7 @@ class RichRenderer:
         text = "".join(self._buffer)
         if not text.strip():
             return
-        renderable = _output_panel(
-            Markdown(text),
-            title=Text("Assistant Output", style=RICH_STYLE_RULES["accent"]),
-            border_style=RICH_STYLE_RULES["border"],
-        )
+        renderable = _message_block(text, title="Assistant Output")
         if self._live is None:
             self._live = Live(
                 renderable,
@@ -233,13 +219,13 @@ class RichRenderer:
         scope = self._thinking_scope
         self._thinking_scope = None
         if text.strip():
-            self.console.print(
-                _output_panel(
-                    Text(text, style="dim"),
-                    title=Text(_thinking_title(scope), style=RICH_STYLE_RULES["thinking"]),
-                    border_style=RICH_STYLE_RULES["thinking_border"],
-                )
+            line = Text.assemble(
+                ("✦ ", RICH_STYLE_RULES["thinking"]),
+                (_thinking_title(scope), RICH_STYLE_RULES["thinking"]),
+                (" · ", "dim"),
+                (_compact_text(text, 500), "dim"),
             )
+            self._print_compact_line(line)
 
     def _record_usage(self, usage: dict[str, Any]) -> None:
         input_tokens = int(usage.get("input_tokens") or 0)
@@ -252,41 +238,27 @@ class RichRenderer:
     def _print_tool_call(self, event: AgentEvent) -> None:
         name = str(event.get("name") or "unknown")
         payload = event.get("input") or {}
-        body = Table.grid(padding=(0, 1))
-        body.add_column(style="dim", no_wrap=True)
-        body.add_column()
-        body.add_row("name", Text(name, style=RICH_STYLE_RULES["tool"]))
-        body.add_row("input", Text(_format_payload(payload)))
-        self.console.print(
-            _output_panel(
-                body,
-                title=Text(_scoped_title("Tool Use", event), style=RICH_STYLE_RULES["tool"]),
-                border_style=RICH_STYLE_RULES["tool_border"],
-            )
-        )
+        line = Text("● ", style=RICH_STYLE_RULES["tool"])
+        line.append(_scoped_title(name, event), style=RICH_STYLE_RULES["tool"])
+        if payload:
+            line.append("  ")
+            line.append(_compact_text(_format_payload(payload), 180), style="dim")
+        self._print_compact_line(line)
 
     def _print_tool_result(self, event: AgentEvent) -> None:
         is_error = bool(event.get("is_error"))
         name = str(event.get("name") or "unknown")
-        result = str(event.get("result") or "")
-        if len(result) > 1200:
-            result = result[:1200] + "\n... [truncated]"
+        result = _compact_text(str(event.get("result") or "(empty result)"), 240)
         title_style = RICH_STYLE_RULES["error" if is_error else "success"]
-        border_style = RICH_STYLE_RULES["error_border" if is_error else "success_border"]
         status = "error" if is_error else "ok"
         recovery_status = str(event.get("recovery_status") or "")
         if recovery_status in {"replayed", "reconciled", "uncertain"}:
             status = f"{status} · {recovery_status}"
-        self.console.print(
-            _output_panel(
-                result or "(empty result)",
-                title=Text(
-                    _scoped_title(f"Tool Result · {name} · {status}", event),
-                    style=title_style,
-                ),
-                border_style=border_style,
-            )
-        )
+        line = Text("  └ ", style="dim")
+        line.append(_scoped_title(name, event), style=title_style)
+        line.append(f" · {status} · ", style=title_style)
+        line.append(result, style="dim" if not is_error else "red")
+        self._print_compact_line(line)
 
     def _record_run_summary(self, event: AgentEvent) -> None:
         total_tokens = int(event.get("total_tokens") or self._input_tokens + self._output_tokens)
@@ -303,21 +275,35 @@ class RichRenderer:
     def _print_run_finished(self, event: AgentEvent) -> None:
         trace = event.get("trace") or {}
         run_id = str(trace.get("run_id") or self._current_run_id)
-        short_id = run_id.removeprefix("run_")
         status = str(trace.get("status") or "completed")
         duration_ms = int(trace.get("duration_ms") or 0)
         turns = int(trace.get("turns") or 0)
         usage = trace.get("usage") or {}
         tokens = int(usage.get("total_tokens") or 0)
         tools = int(trace.get("tool_calls") or 0)
-        summary = (
-            f"Run {short_id} · {status} · {duration_ms / 1_000:.2f}s · "
-            f"{turns} turns · {tokens} tokens · {tools} tools"
-        )
-        self.console.print(Text(summary, style="dim"))
+        label = {
+            "completed": "Completed",
+            "cancelled": "Cancelled",
+            "failed": "Failed",
+        }.get(status, status.title())
+        details = [
+            f"{duration_ms / 1_000:.2f}s",
+            _plural_count(turns, "turn"),
+            _plural_count(tools, "tool"),
+        ]
+        if tokens:
+            details.append(f"{_compact_number(tokens)} tokens")
+        summary = f"✦ {label} in " + " · ".join(details)
+        if label != "Completed" and run_id:
+            summary += f" · {run_id.removeprefix('run_')}"
+        self._print_compact_line(Text(summary, style="dim"))
         warning = str(event.get("warning") or "")
         if warning:
             self.console.print(Text(warning, style="yellow"))
+
+    def _print_compact_line(self, line: Text) -> None:
+        line.truncate(max(20, self.console.width - 1), overflow="ellipsis")
+        self.console.print(line, no_wrap=True)
 
     def _identity_panel(self, *, version: str, api_key_configured: bool) -> Table:
         logo = Text("\n".join(_VELA_MARK), style=RICH_STYLE_RULES["logo"])
@@ -375,6 +361,26 @@ def _format_payload(payload: Any) -> str:
         return str(payload)
 
 
+def _compact_text(value: str, limit: int) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "…"
+
+
+def _compact_number(value: int) -> str:
+    if value < 1_000:
+        return str(value)
+    if value < 10_000:
+        return f"{value / 1_000:.1f}k"
+    return f"{value // 1_000}k"
+
+
+def _plural_count(value: int, noun: str) -> str:
+    suffix = "" if value == 1 else "s"
+    return f"{value} {noun}{suffix}"
+
+
 def _thinking_scope(event: AgentEvent) -> str | None:
     task_id = str(event.get("task_id") or "").strip()
     if task_id:
@@ -397,11 +403,12 @@ def _scoped_title(title: str, event: AgentEvent) -> str:
     return f"{title} · {task_id}" if task_id else title
 
 
-def _output_panel(renderable: Any, *, title: Text, border_style: str) -> Panel:
-    return Panel(
-        renderable,
-        title=title,
-        border_style=border_style,
-        box=box.ROUNDED,
-        expand=True,
-    )
+def _message_block(text: str, *, title: str) -> Table:
+    body = Table.grid(padding=(0, 1), expand=True)
+    body.add_column(no_wrap=True)
+    body.add_column(ratio=1)
+    prefix = Text("●", style=RICH_STYLE_RULES["accent"])
+    if title == "Plan":
+        prefix.append(" Plan", style=RICH_STYLE_RULES["accent"])
+    body.add_row(prefix, Markdown(text))
+    return body
