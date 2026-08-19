@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.filters import to_filter
+from prompt_toolkit.filters import Condition, is_done, to_filter
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.containers import (
@@ -44,6 +44,8 @@ REPL_STYLE_RULES = {
     "toolbar.mode.auto": "bold ansiyellow",
     "toolbar.task": "bold ansimagenta",
     "toolbar.gap": "",
+    "bottom-toolbar": "",
+    "bottom-toolbar.text": "",
 }
 
 PermissionMode = Literal["default", "auto"]
@@ -79,7 +81,7 @@ class PermissionModeController:
 
 
 class BorderedPromptSession(PromptSession):
-    """Prompt Toolkit session with a stable bordered input area."""
+    """Prompt Toolkit session with an ephemeral status bar and bordered input."""
 
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("reserve_space_for_menu", 0)
@@ -90,7 +92,10 @@ class BorderedPromptSession(PromptSession):
         root = layout.container
         if not isinstance(root, HSplit):
             raise RuntimeError("Unsupported Prompt Toolkit layout")
-        main_section = root.children[0]
+        status_section = root.children.pop()
+        status_section.filter = Condition(lambda: self.bottom_toolbar is not None) & ~is_done
+        root.children.insert(0, status_section)
+        main_section = root.children[1]
         if not isinstance(main_section, ConditionalContainer):
             raise RuntimeError("Unsupported Prompt Toolkit input section")
         main_input = main_section.alternative_content

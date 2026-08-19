@@ -5,7 +5,6 @@ from io import StringIO
 from types import SimpleNamespace
 
 import pytest
-from prompt_toolkit.formatted_text import FormattedText
 from rich.console import Console
 
 import vela.agent.agent as agent_module
@@ -523,30 +522,6 @@ def test_repl_keeps_typeahead_draft_when_two_messages_arrive_together(tmp_path, 
     assert active_while_drafting
     assert draft == "next task"
     assert "当前任务仍在运行" not in output
-
-
-def test_prompt_status_is_printed_as_formatted_text(tmp_path, monkeypatch):
-    store = SessionStore(tmp_path / "sessions.db")
-    active = ActiveSession.open(tmp_path / "project", store=store)
-    console = Console(file=StringIO(), color_system=None)
-    runtime = _repl_runtime(tmp_path / "project", active, _FakeAgent(), console)
-    runtime.status_provider = lambda: [("class:prompt", "status")]
-    session = SimpleNamespace(style="style", app=SimpleNamespace(output="output"))
-    captured = {}
-
-    def capture(value, **kwargs):
-        captured["value"] = value
-        captured.update(kwargs)
-
-    monkeypatch.setattr(repl, "print_formatted_text", capture)
-
-    repl._print_prompt_status(session, runtime)
-
-    assert isinstance(captured["value"], FormattedText)
-    assert list(captured["value"]) == [("class:prompt", "status")]
-    assert captured["style"] == "style"
-    assert captured["output"] == "output"
-    assert captured["end"] == "\n\n"
 
 
 def test_help_explains_cancel_plan_review_and_resume_contracts(tmp_path):

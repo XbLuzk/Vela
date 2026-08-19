@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from prompt_toolkit import PromptSession, print_formatted_text
+from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
@@ -53,7 +51,6 @@ class ReplRuntime:
     renderer: RichRenderer
     active_session: ActiveSession
     task_controller: InteractiveTaskController
-    status_provider: Callable[[], list[tuple[str, str]]] | None = None
 
 
 # Startup ---------------------------------------------------------------------
@@ -122,6 +119,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
     repl_style = Style.from_dict(REPL_STYLE_RULES)
     session = BorderedPromptSession(
         message=prompt_message(),
+        bottom_toolbar=status_provider,
         history=FileHistory(str(history_path)),
         completer=WordCompleter(SLASH_COMMANDS, ignore_case=True),
         placeholder=lambda: prompt_placeholder(task_controller),
@@ -147,7 +145,6 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         renderer=renderer,
         active_session=active_session,
         task_controller=task_controller,
-        status_provider=status_provider,
     )
 
     with patch_stdout(raw=True):
@@ -162,15 +159,11 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
     active_session = runtime.active_session
     task_controller = runtime.task_controller
     draft = ""
-    show_status = True
     while True:
-        if show_status:
-            _print_prompt_status(session, runtime)
         try:
             user_input = await session.prompt_async(default=draft)
         except KeyboardInterrupt:
             draft = ""
-            show_status = True
             if task_controller.cancelling:
                 await task_controller.wait()
                 active_session.close()
@@ -195,10 +188,8 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
         message = user_input.strip()
         if _should_hold_draft(message, task_controller):
             draft = user_input
-            show_status = False
             continue
         draft = ""
-        show_status = True
         if await _dispatch_message(message, runtime):
             active_session.close()
             print_session_warning(console, active_session)
@@ -211,17 +202,6 @@ def _should_hold_draft(message: str, controller: InteractiveTaskController) -> b
         and not controller.awaiting_approval
         and not controller.awaiting_plan_review
         and message != "/cancel"
-    )
-
-
-def _print_prompt_status(session: PromptSession, runtime: ReplRuntime) -> None:
-    if runtime.status_provider is None:
-        return
-    print_formatted_text(
-        FormattedText(runtime.status_provider()),
-        style=session.style,
-        output=session.app.output,
-        end="\n\n",
     )
 
 

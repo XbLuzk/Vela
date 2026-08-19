@@ -5,6 +5,7 @@ import time
 from io import StringIO
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application.current import set_app
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.containers import (
@@ -37,13 +38,39 @@ def test_repl_palette_follows_terminal_theme():
     assert all("#" not in style for style in REPL_STYLE_RULES.values())
 
 
+def test_status_bar_is_ephemeral_and_above_the_input():
+    session = BorderedPromptSession(
+        output=DummyOutput(),
+        bottom_toolbar=[("class:toolbar.model", "model")],
+    )
+    root = session.app.layout.container
+
+    assert isinstance(root, HSplit)
+    status_section = root.children[0]
+    assert isinstance(status_section, ConditionalContainer)
+    assert isinstance(status_section.content, Window)
+    assert status_section.content.style == "class:bottom-toolbar"
+
+    async def visibility() -> tuple[bool, bool]:
+        future = asyncio.get_running_loop().create_future()
+        session.app.future = future
+        with set_app(session.app):
+            visible_while_prompting = status_section.filter()
+        future.set_result(None)
+        with set_app(session.app):
+            hidden_when_done = not status_section.filter()
+        return visible_while_prompting, hidden_when_done
+
+    assert asyncio.run(visibility()) == (True, True)
+
+
 def test_input_border_is_inside_the_main_input_stack():
     session = BorderedPromptSession(output=DummyOutput())
     root = session.app.layout.container
 
     assert session.reserve_space_for_menu == 0
     assert isinstance(root, HSplit)
-    main_section = root.children[0]
+    main_section = root.children[1]
     assert isinstance(main_section, ConditionalContainer)
     main_input = main_section.alternative_content
     assert isinstance(main_input, FloatContainer)
@@ -66,7 +93,8 @@ def test_input_border_is_inside_the_main_input_stack():
     assert isinstance(rule, Window)
     assert rule.char == "─"
     assert rule.style == "class:input.rule"
-    assert "bottom-toolbar" not in REPL_STYLE_RULES
+    assert REPL_STYLE_RULES["bottom-toolbar"] == ""
+    assert REPL_STYLE_RULES["bottom-toolbar.text"] == ""
 
 
 def test_status_is_separate_from_the_redrawn_input_prompt():
