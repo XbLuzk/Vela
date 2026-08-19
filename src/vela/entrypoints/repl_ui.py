@@ -21,14 +21,16 @@ from prompt_toolkit.layout.containers import (
     VSplit,
     Window,
 )
+from rich.align import Align
 from rich.console import Console
+from rich.text import Text
 
 from vela.config import VelaConfig
 from vela.image import ClipboardImageResult, grab_clipboard_image
 from vela.task_control import InteractiveTaskController, TaskState
 
 REPL_STYLE_RULES = {
-    "prompt": "bold ansiblue",
+    "prompt": "ansibrightblack",
     "placeholder": "italic ansibrightblack",
     "input.rule": "ansibrightblack",
     "prompt.dim": "ansibrightblack",
@@ -81,10 +83,11 @@ class PermissionModeController:
 
 
 class BorderedPromptSession(PromptSession):
-    """Prompt Toolkit session with an ephemeral status bar and bordered input."""
+    """Prompt session pinned above an ephemeral bottom status bar."""
 
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("reserve_space_for_menu", 0)
+        kwargs.setdefault("erase_when_done", True)
         super().__init__(*args, **kwargs)
 
     def _create_layout(self):
@@ -92,10 +95,9 @@ class BorderedPromptSession(PromptSession):
         root = layout.container
         if not isinstance(root, HSplit):
             raise RuntimeError("Unsupported Prompt Toolkit layout")
-        status_section = root.children.pop()
+        status_section = root.children[-1]
         status_section.filter = Condition(lambda: self.bottom_toolbar is not None) & ~is_done
-        root.children.insert(0, status_section)
-        main_section = root.children[1]
+        main_section = root.children[0]
         if not isinstance(main_section, ConditionalContainer):
             raise RuntimeError("Unsupported Prompt Toolkit input section")
         main_input = main_section.alternative_content
@@ -104,10 +106,11 @@ class BorderedPromptSession(PromptSession):
         input_stack = main_input.content
         if not isinstance(input_stack, HSplit):
             raise RuntimeError("Unsupported Prompt Toolkit input stack")
-        input_stack.align = VerticalAlign.TOP
+        input_stack.align = VerticalAlign.BOTTOM
         for child in input_stack.children:
             if isinstance(child, ConditionalContainer) and isinstance(child.content, Window):
                 child.content.dont_extend_height = to_filter(True)
+        input_stack.children.insert(0, input_border_row())
         input_stack.children.append(input_border_row())
         return layout
 
@@ -178,7 +181,19 @@ def permission_key_bindings(
 def prompt_message() -> list[tuple[str, str]]:
     """Build the small editable prompt that can be safely redrawn."""
 
-    return [("class:prompt", "* ")]
+    return [("class:prompt", "❯ ")]
+
+
+def user_history_message(message: str) -> Align:
+    """Render submitted input without copying the interactive composer chrome."""
+
+    lines = message.splitlines() or [""]
+    rendered = Text("❯ ", style="bright_black")
+    rendered.append(lines[0])
+    for line in lines[1:]:
+        rendered.append("\n  ")
+        rendered.append(line)
+    return Align.left(rendered, style="on grey93")
 
 
 def prompt_placeholder(task_controller: InteractiveTaskController) -> list[tuple[str, str]]:
@@ -207,7 +222,7 @@ def prompt_status(
     permission_mode: PermissionMode = "default",
     task_state: TaskState | None = None,
 ) -> list[tuple[str, str]]:
-    """Build the status block printed once before each editable prompt."""
+    """Build the live status block shown below the editable prompt."""
 
     return [
         ("class:prompt.count.agents", str(agents_files)),

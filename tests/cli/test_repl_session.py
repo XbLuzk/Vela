@@ -469,6 +469,31 @@ def test_repl_opens_the_next_draft_prompt_while_task_is_running(tmp_path, monkey
     assert controller.state == TaskState.COMPLETED
 
 
+def test_repl_prints_submitted_message_as_compact_history(tmp_path, monkeypatch):
+    store = SessionStore(tmp_path / "sessions.db")
+    active = ActiveSession.open(tmp_path / "project", store=store)
+    console = Console(file=StringIO(), color_system=None)
+
+    class OneMessageSession:
+        submitted = False
+
+        async def prompt_async(self, **_kwargs):
+            if not self.submitted:
+                self.submitted = True
+                return "hello"
+            raise EOFError
+
+    async def complete_agent(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(repl, "run_agent_with_session", complete_agent)
+    runtime = _repl_runtime(tmp_path / "project", active, _FakeAgent(), console)
+
+    asyncio.run(_repl_loop(OneMessageSession(), runtime))
+
+    assert "❯ hello" in console.file.getvalue()
+
+
 def test_repl_keeps_typeahead_draft_when_two_messages_arrive_together(tmp_path, monkeypatch):
     store = SessionStore(tmp_path / "sessions.db")
     active = ActiveSession.open(tmp_path / "project", store=store)

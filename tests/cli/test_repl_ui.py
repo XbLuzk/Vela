@@ -16,10 +16,13 @@ from prompt_toolkit.layout.containers import (
     VSplit,
     Window,
 )
+from prompt_toolkit.layout.mouse_handlers import MouseHandlers
+from prompt_toolkit.layout.screen import Screen, WritePosition
 from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.styles import Style, merge_styles
 from prompt_toolkit.styles.defaults import default_ui_style
 from rich.console import Console
+from rich.text import Text
 
 from vela.config import load_config
 from vela.entrypoints.repl_ui import (
@@ -30,6 +33,7 @@ from vela.entrypoints.repl_ui import (
     permission_key_bindings,
     prompt_message,
     prompt_status,
+    user_history_message,
 )
 from vela.image import ClipboardImageResult
 from vela.task_control import InteractiveTaskController, TaskState
@@ -40,7 +44,7 @@ def test_repl_palette_follows_terminal_theme():
     assert all("#" not in style for style in REPL_STYLE_RULES.values())
 
 
-def test_status_bar_is_ephemeral_and_above_the_input():
+def test_composer_is_pinned_above_ephemeral_bottom_status():
     session = BorderedPromptSession(
         output=DummyOutput(),
         bottom_toolbar=[("class:toolbar.model", "model")],
@@ -48,7 +52,7 @@ def test_status_bar_is_ephemeral_and_above_the_input():
     root = session.app.layout.container
 
     assert isinstance(root, HSplit)
-    status_section = root.children[0]
+    status_section = root.children[-1]
     assert isinstance(status_section, ConditionalContainer)
     assert isinstance(status_section.content, Window)
     assert status_section.content.style == "class:bottom-toolbar"
@@ -66,19 +70,20 @@ def test_status_bar_is_ephemeral_and_above_the_input():
     assert asyncio.run(visibility()) == (True, True)
 
 
-def test_input_border_is_inside_the_main_input_stack():
+def test_input_borders_are_inside_the_fixed_composer():
     session = BorderedPromptSession(output=DummyOutput())
     root = session.app.layout.container
 
     assert session.reserve_space_for_menu == 0
+    assert session.app.erase_when_done
     assert isinstance(root, HSplit)
-    main_section = root.children[1]
+    main_section = root.children[0]
     assert isinstance(main_section, ConditionalContainer)
     main_input = main_section.alternative_content
     assert isinstance(main_input, FloatContainer)
     input_stack = main_input.content
     assert isinstance(input_stack, HSplit)
-    assert input_stack.align == VerticalAlign.TOP
+    assert input_stack.align == VerticalAlign.BOTTOM
 
     input_windows = [
         child.content
@@ -88,13 +93,13 @@ def test_input_border_is_inside_the_main_input_stack():
     assert input_windows
     assert all(window.dont_extend_height() for window in input_windows)
 
-    border = input_stack.children[-1]
-    assert isinstance(border, VSplit)
-    assert len(border.children) == 3
-    rule = border.children[1]
-    assert isinstance(rule, Window)
-    assert rule.char == "─"
-    assert rule.style == "class:input.rule"
+    for border in (input_stack.children[0], input_stack.children[-1]):
+        assert isinstance(border, VSplit)
+        assert len(border.children) == 3
+        rule = border.children[1]
+        assert isinstance(rule, Window)
+        assert rule.char == "─"
+        assert rule.style == "class:input.rule"
     effective_style = merge_styles([default_ui_style(), Style.from_dict(REPL_STYLE_RULES)])
     assert not effective_style.get_attrs_for_style_str("class:bottom-toolbar").reverse
     assert not effective_style.get_attrs_for_style_str("class:bottom-toolbar.text").reverse
@@ -104,6 +109,42 @@ def test_input_border_is_inside_the_main_input_stack():
     assert count_style.color == "ansiblue"
     assert count_style.bgcolor == ""
     assert not count_style.reverse
+
+
+def test_composer_and_status_use_the_bottom_rows_without_a_gap():
+    async def render_rows() -> list[str]:
+        session = BorderedPromptSession(
+            message=prompt_message(),
+            output=DummyOutput(),
+            bottom_toolbar=[("", "status one\nstatus two")],
+        )
+        future = asyncio.get_running_loop().create_future()
+        session.app.future = future
+        with set_app(session.app):
+            screen = Screen()
+            session.app.layout.container.write_to_screen(
+                screen,
+                MouseHandlers(),
+                WritePosition(xpos=0, ypos=0, width=50, height=12),
+                parent_style="",
+                erase_bg=False,
+                z_index=None,
+            )
+            await asyncio.sleep(0)
+            rows = [
+                "".join(screen.data_buffer[y][x].char for x in range(50)).rstrip()
+                for y in range(12)
+            ]
+            future.cancel()
+            await session.app.cancel_and_wait_for_background_tasks()
+            return rows
+
+    rows = asyncio.run(render_rows())
+
+    assert rows[-5].lstrip().startswith("─")
+    assert rows[-4] == "❯"
+    assert rows[-3].lstrip().startswith("─")
+    assert rows[-2:] == ["status one", "status two"]
 
 
 def test_status_is_separate_from_the_redrawn_input_prompt():
@@ -126,8 +167,16 @@ def test_status_is_separate_from_the_redrawn_input_prompt():
     assert "deepseek-v4-flash" in status_text
     assert "█░░░░░░░░░░░ 1%" in status_text
     assert "/tmp/project" in status_text
-    assert "* " not in status_text
-    assert prompt_text == "* "
+    assert "❯ " not in status_text
+    assert prompt_text == "❯ "
+
+
+def test_submitted_input_uses_compact_history_format():
+    rendered = user_history_message("first line\nsecond line")
+
+    assert isinstance(rendered.renderable, Text)
+    assert rendered.renderable.plain == "❯ first line\n  second line"
+    assert str(rendered.style) == "on grey93"
 
 
 def test_permission_mode_toggle_applies_and_restores_full_access_policy(tmp_path):

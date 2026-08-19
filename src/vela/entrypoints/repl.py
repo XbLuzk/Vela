@@ -28,6 +28,7 @@ from vela.entrypoints.repl_ui import (
     prompt_message,
     prompt_placeholder,
     prompt_status,
+    user_history_message,
 )
 from vela.llm import create_llm_client
 from vela.render import RichRenderer
@@ -190,6 +191,8 @@ async def _repl_loop(session: PromptSession, runtime: ReplRuntime) -> None:
             draft = user_input
             continue
         draft = ""
+        if message:
+            console.print(user_history_message(message))
         if await _dispatch_message(message, runtime):
             active_session.close()
             print_session_warning(console, active_session)
