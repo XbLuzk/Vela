@@ -44,8 +44,8 @@ REPL_STYLE_RULES = {
     "toolbar.mode.auto": "bold ansiyellow",
     "toolbar.task": "bold ansimagenta",
     "toolbar.gap": "",
-    "bottom-toolbar": "",
-    "bottom-toolbar.text": "",
+    "bottom-toolbar": "noreverse",
+    "bottom-toolbar.text": "noreverse",
 }
 
 PermissionMode = Literal["default", "auto"]

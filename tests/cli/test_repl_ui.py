@@ -17,6 +17,8 @@ from prompt_toolkit.layout.containers import (
     Window,
 )
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.styles import Style, merge_styles
+from prompt_toolkit.styles.defaults import default_ui_style
 from rich.console import Console
 
 from vela.config import load_config
@@ -93,8 +95,15 @@ def test_input_border_is_inside_the_main_input_stack():
     assert isinstance(rule, Window)
     assert rule.char == "─"
     assert rule.style == "class:input.rule"
-    assert REPL_STYLE_RULES["bottom-toolbar"] == ""
-    assert REPL_STYLE_RULES["bottom-toolbar.text"] == ""
+    effective_style = merge_styles([default_ui_style(), Style.from_dict(REPL_STYLE_RULES)])
+    assert not effective_style.get_attrs_for_style_str("class:bottom-toolbar").reverse
+    assert not effective_style.get_attrs_for_style_str("class:bottom-toolbar.text").reverse
+    count_style = effective_style.get_attrs_for_style_str(
+        "class:bottom-toolbar class:bottom-toolbar.text class:prompt.count.agents"
+    )
+    assert count_style.color == "ansiblue"
+    assert count_style.bgcolor == ""
+    assert not count_style.reverse
 
 
 def test_status_is_separate_from_the_redrawn_input_prompt():
