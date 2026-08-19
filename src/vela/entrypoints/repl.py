@@ -22,7 +22,7 @@ from vela.entrypoints.repl_commands import SLASH_COMMANDS, handle_slash
 from vela.entrypoints.repl_tasks import print_session_warning, run_agent_with_session
 from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
-    BorderedPromptSession,
+    FixedComposerPromptSession,
     PermissionModeController,
     permission_key_bindings,
     prompt_message,
@@ -118,7 +118,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         )
 
     repl_style = Style.from_dict(REPL_STYLE_RULES)
-    session = BorderedPromptSession(
+    session = FixedComposerPromptSession(
         message=prompt_message(),
         bottom_toolbar=status_provider,
         history=FileHistory(str(history_path)),

@@ -82,7 +82,7 @@ class PermissionModeController:
         return self.set("auto" if self.mode == "default" else "default")
 
 
-class BorderedPromptSession(PromptSession):
+class FixedComposerPromptSession(PromptSession):
     """Prompt session pinned above an ephemeral bottom status bar."""
 
     def __init__(self, *args, **kwargs):

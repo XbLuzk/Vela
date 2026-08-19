@@ -27,7 +27,7 @@ from rich.text import Text
 from vela.config import load_config
 from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
-    BorderedPromptSession,
+    FixedComposerPromptSession,
     PermissionModeController,
     bottom_toolbar,
     permission_key_bindings,
@@ -45,7 +45,7 @@ def test_repl_palette_follows_terminal_theme():
 
 
 def test_composer_is_pinned_above_ephemeral_bottom_status():
-    session = BorderedPromptSession(
+    session = FixedComposerPromptSession(
         output=DummyOutput(),
         bottom_toolbar=[("class:toolbar.model", "model")],
     )
@@ -71,7 +71,7 @@ def test_composer_is_pinned_above_ephemeral_bottom_status():
 
 
 def test_input_borders_are_inside_the_fixed_composer():
-    session = BorderedPromptSession(output=DummyOutput())
+    session = FixedComposerPromptSession(output=DummyOutput())
     root = session.app.layout.container
 
     assert session.reserve_space_for_menu == 0
@@ -111,9 +111,39 @@ def test_input_borders_are_inside_the_fixed_composer():
     assert not count_style.reverse
 
 
+def test_submitted_composer_is_erased_when_prompt_finishes():
+    class EraseTrackingOutput(DummyOutput):
+        def __init__(self) -> None:
+            self.erase_down_calls = 0
+
+        def erase_down(self) -> None:
+            self.erase_down_calls += 1
+
+    async def submit_prompt() -> tuple[str, int, int]:
+        with create_pipe_input() as pipe_input:
+            output = EraseTrackingOutput()
+            session = FixedComposerPromptSession(
+                message=prompt_message(),
+                input=pipe_input,
+                output=output,
+                bottom_toolbar=[("", "status")],
+            )
+            prompt = asyncio.create_task(session.prompt_async())
+            await asyncio.sleep(0.01)
+            erase_before_submit = output.erase_down_calls
+            pipe_input.send_text("hello\r")
+            result = await prompt
+            return result, erase_before_submit, output.erase_down_calls
+
+    result, erase_before_submit, erase_after_submit = asyncio.run(submit_prompt())
+
+    assert result == "hello"
+    assert erase_after_submit == erase_before_submit + 1
+
+
 def test_composer_and_status_use_the_bottom_rows_without_a_gap():
     async def render_rows() -> list[str]:
-        session = BorderedPromptSession(
+        session = FixedComposerPromptSession(
             message=prompt_message(),
             output=DummyOutput(),
             bottom_toolbar=[("", "status one\nstatus two")],
