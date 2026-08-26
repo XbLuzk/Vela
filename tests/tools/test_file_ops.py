@@ -416,16 +416,20 @@ def test_get_file_info_describes_files_and_directories(tmp_path):
 def test_get_file_info_reports_stat_errors(tmp_path, monkeypatch):
     (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
     real_stat = type(tmp_path).stat
-    calls: list[str] = []
+    real_exists = type(tmp_path).exists
 
     def guarded_stat(self, *args, **kwargs):
         if self.name == "a.txt":
-            calls.append(self.name)
-            if len(calls) > 1:
-                raise OSError("stale handle")
+            raise OSError("stale handle")
         return real_stat(self, *args, **kwargs)
 
+    def guarded_exists(self, *args, **kwargs):
+        if self.name == "a.txt":
+            return True
+        return real_exists(self, *args, **kwargs)
+
     monkeypatch.setattr("pathlib.Path.stat", guarded_stat)
+    monkeypatch.setattr("pathlib.Path.exists", guarded_exists)
     result = fops.get_file_info(str(tmp_path), "a.txt")
 
     assert result.is_error
