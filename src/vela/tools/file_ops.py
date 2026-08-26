@@ -297,7 +297,13 @@ def directory_tree(
     exclude = set(exclude_patterns) if exclude_patterns else SKIP_DIRS
 
     lines: list[str] = [f"{resolved.name}/"]
-    _walk_tree(resolved, resolved, "", max_depth, exclude, lines)
+    unreadable: list[str] = []
+    _walk_tree(resolved, resolved, "", max_depth, exclude, lines, unreadable)
+    if unreadable:
+        suffix = "directory" if len(unreadable) == 1 else "directories"
+        lines.append(
+            f"\n(skipped {len(unreadable)} unreadable {suffix}: {', '.join(unreadable[:3])})"
+        )
     return FileOpResult("\n".join(lines))
 
 
@@ -308,12 +314,14 @@ def _walk_tree(
     max_depth: int,
     exclude: set[str],
     lines: list[str],
+    unreadable: list[str],
 ) -> None:
     if max_depth <= 0:
         return
     try:
         entries = sorted(current.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
-    except OSError:
+    except OSError as exc:
+        unreadable.append(f"{_relative_to(current, str(root))}: {exc.strerror or exc}")
         return
     for i, child in enumerate(entries):
         if child.name in exclude:
@@ -324,7 +332,7 @@ def _walk_tree(
         lines.append(f"{prefix}{connector}{child.name}{marker}")
         if child.is_dir():
             extension = "    " if is_last else "│   "
-            _walk_tree(root, child, prefix + extension, max_depth - 1, exclude, lines)
+            _walk_tree(root, child, prefix + extension, max_depth - 1, exclude, lines, unreadable)
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +363,7 @@ def grep(
         return FileOpResult(f"invalid regex: {exc}", is_error=True)
 
     matches: list[str] = []
+    unreadable: list[str] = []
     files = [start] if start.is_file() else [p for p in start.rglob("*") if p.is_file()]
 
     for file_path in files:
@@ -362,16 +371,18 @@ def grep(
             continue
         try:
             lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except OSError:
+        except OSError as exc:
+            unreadable.append(f"{_relative_to(file_path, cwd)}: {exc.strerror or exc}")
             continue
         for line_number, line in enumerate(lines, start=1):
             found = bool(compiled.search(line)) if compiled else pattern in line
             if found:
                 matches.append(f"{file_path.relative_to(root)}:{line_number}: {line.strip()}")
                 if len(matches) >= limit:
-                    return FileOpResult("\n".join(matches))
+                    return FileOpResult("\n".join(matches + _unreadable_note(unreadable)))
 
-    return FileOpResult("\n".join(matches) or "(no matches)")
+    body = matches or ["(no matches)"]
+    return FileOpResult("\n".join(body + _unreadable_note(unreadable)))
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +424,16 @@ def get_file_info(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _unreadable_note(unreadable: list[str]) -> list[str]:
+    """Describe search targets that had to be skipped so results are not silently partial."""
+    if not unreadable:
+        return []
+    suffix = "file" if len(unreadable) == 1 else "files"
+    listed = ", ".join(unreadable[:3])
+    more = "" if len(unreadable) <= 3 else f", and {len(unreadable) - 3} more"
+    return [f"\n(skipped {len(unreadable)} unreadable {suffix}: {listed}{more})"]
 
 
 def _relative_to(path: Path, cwd: str) -> Path:

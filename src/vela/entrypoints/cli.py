@@ -190,11 +190,15 @@ def main(
         llm_overrides["base_url"] = base_url
     if llm_overrides:
         overrides["llm"] = llm_overrides
+    config_warnings: list[str] = []
     config = load_config(
         project_root=root,
         overrides=overrides,
         include_project=project_trusted,
+        warnings=config_warnings,
     )
+    for warning in config_warnings:
+        typer.echo(f"Config warning: {warning}", err=True)
 
     if prompt is not None:
         selected_mode = (mode or config.prompt.agent_mode or "react").lower()
@@ -225,7 +229,14 @@ def doctor(
     """Inspect the system: Python, uv, Node, API key, and config."""
     root = (cwd or Path.cwd()).resolve()
     project_trusted = _resolve_cli_project_trust(root, interactive=False, override=None)
-    config = load_config(project_root=root, include_project=project_trusted)
+    config_warnings: list[str] = []
+    config = load_config(
+        project_root=root,
+        include_project=project_trusted,
+        warnings=config_warnings,
+    )
+    mcp_warnings: list[str] = []
+    load_mcp_server_specs(root, include_project=project_trusted, warnings=mcp_warnings)
     checks = {
         "python": sys.version.split()[0],
         "uv": shutil.which("uv") or "missing",
@@ -240,6 +251,7 @@ def doctor(
         "config_paths": [
             str(path) for path in get_config_paths(root, include_project=project_trusted)
         ],
+        "config_warnings": config_warnings + mcp_warnings,
     }
     console.print_json(json.dumps(checks, ensure_ascii=False))
 
@@ -365,7 +377,10 @@ def mcp_list(
 ) -> None:
     """List configured MCP servers."""
     root = (cwd or Path.cwd()).resolve()
-    specs = load_mcp_server_specs(root)
+    warnings: list[str] = []
+    specs = load_mcp_server_specs(root, warnings=warnings)
+    for warning in warnings:
+        typer.echo(warning, err=True)
     if not specs:
         typer.echo("No MCP servers configured.")
         return

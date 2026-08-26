@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from contextlib import suppress
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -103,28 +102,37 @@ def load_config(
     env: dict[str, str | None] | None = None,
     *,
     include_project: bool = True,
+    warnings: list[str] | None = None,
 ) -> VelaConfig:
+    """Build the effective configuration from defaults, files, env, and overrides.
+
+    Unreadable or malformed configuration sources are skipped so a broken file
+    cannot make Vela unusable, but every skipped source and every rejected value
+    is appended to *warnings* so the caller can report it instead of leaving the
+    user with silently ignored settings.
+    """
+    sink = warnings if warnings is not None else []
     env_map = env if env is not None else os.environ
     data = _config_to_dict(VelaConfig())
 
-    user_config = _read_json(_home() / ".vela" / "config.json")
+    user_config = _read_json(_home() / ".vela" / "config.json", sink)
     if user_config:
         data = _deep_merge(data, user_config)
 
     root = Path(project_root).resolve() if project_root else None
     if root and include_project:
-        project_config = _read_json(root / ".vela" / "config.json")
+        project_config = _read_json(root / ".vela" / "config.json", sink)
         if project_config:
             data = _deep_merge(data, project_config)
-        project_env = _read_env(root / ".env")
+        project_env = _read_env(root / ".env", sink)
         if project_env:
-            data = _apply_env(data, project_env)
+            data = _apply_env(data, project_env, sink, source=str(root / ".env"))
 
     if overrides:
         data = _deep_merge(data, overrides)
 
-    data = _apply_env(data, env_map)
-    config = _dict_to_config(data)
+    data = _apply_env(data, env_map, sink, source="environment")
+    config = _dict_to_config(data, sink)
     config.project_trusted = include_project
     config.memory.long_term_db_path = _expand_home(config.memory.long_term_db_path)
     config.policy.audit_log_path = _expand_home(config.policy.audit_log_path)
@@ -150,23 +158,31 @@ def config_to_public_dict(config: VelaConfig) -> dict[str, Any]:
     return data
 
 
-def _read_json(path: Path) -> dict[str, Any] | None:
+def _read_json(path: Path, warnings: list[str]) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError as exc:
+        warnings.append(f"Ignored config file {path}: {exc}")
         return None
-    return raw if isinstance(raw, dict) else None
+    except json.JSONDecodeError as exc:
+        warnings.append(f"Ignored config file {path}: invalid JSON at line {exc.lineno}: {exc.msg}")
+        return None
+    if not isinstance(raw, dict):
+        warnings.append(f"Ignored config file {path}: expected a JSON object")
+        return None
+    return raw
 
 
-def _read_env(path: Path) -> dict[str, str]:
+def _read_env(path: Path, warnings: list[str]) -> dict[str, str]:
     result: dict[str, str] = {}
     if not path.exists():
         return result
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError) as exc:
+        warnings.append(f"Ignored env file {path}: {exc}")
         return result
     for raw_line in lines:
         line = raw_line.strip()
@@ -183,7 +199,13 @@ def _read_env(path: Path) -> dict[str, str]:
     return result
 
 
-def _apply_env(data: dict[str, Any], env: dict[str, str | None]) -> dict[str, Any]:
+def _apply_env(
+    data: dict[str, Any],
+    env: dict[str, str | None],
+    warnings: list[str],
+    *,
+    source: str,
+) -> dict[str, Any]:
     result = deepcopy(data)
     llm = result.setdefault("llm", {})
     features = result.setdefault("features", {})
@@ -200,9 +222,12 @@ def _apply_env(data: dict[str, Any], env: dict[str, str | None]) -> dict[str, An
     ]
     for env_key, config_key, caster in mappings:
         raw = env.get(env_key)
-        if raw not in (None, ""):
-            with suppress(TypeError, ValueError):
-                llm[config_key] = caster(raw)
+        if raw in (None, ""):
+            continue
+        try:
+            llm[config_key] = caster(raw)
+        except (TypeError, ValueError):
+            warnings.append(f"Ignored {env_key}={raw!r} from {source}: expected {caster.__name__}")
 
     provider = str(llm.get("provider") or "").lower()
     if not llm.get("api_key"):
@@ -239,10 +264,16 @@ def _apply_env(data: dict[str, Any], env: dict[str, str | None]) -> dict[str, An
             features[feature_key] = False
         elif raw == "true":
             features[feature_key] = True
+        elif raw not in (None, ""):
+            warnings.append(f"Ignored {env_key}={raw!r} from {source}: expected true or false")
 
     hitl = env.get("VELA_HITL")
     if hitl in {"always", "auto", "never"}:
         policy["hitl_mode"] = hitl
+    elif hitl not in (None, ""):
+        warnings.append(
+            f"Ignored VELA_HITL={hitl!r} from {source}: expected always, auto, or never"
+        )
 
     return result
 
@@ -266,15 +297,27 @@ def _config_to_dict(config: VelaConfig) -> dict[str, Any]:
     return data
 
 
-def _dict_to_config(data: dict[str, Any]) -> VelaConfig:
+def _dict_to_config(data: dict[str, Any], warnings: list[str]) -> VelaConfig:
     return VelaConfig(
-        llm=LlmConfig(**data.get("llm", {})),
-        tools=ToolsConfig(**data.get("tools", {})),
-        memory=MemoryConfig(**data.get("memory", {})),
-        policy=PolicyConfig(**data.get("policy", {})),
-        prompt=PromptConfig(**data.get("prompt", {})),
-        features=FeatureConfig(**data.get("features", {})),
+        llm=_section(LlmConfig, data, "llm", warnings),
+        tools=_section(ToolsConfig, data, "tools", warnings),
+        memory=_section(MemoryConfig, data, "memory", warnings),
+        policy=_section(PolicyConfig, data, "policy", warnings),
+        prompt=_section(PromptConfig, data, "prompt", warnings),
+        features=_section(FeatureConfig, data, "features", warnings),
     )
+
+
+def _section(factory: Any, data: dict[str, Any], name: str, warnings: list[str]) -> Any:
+    raw = data.get(name, {})
+    if not isinstance(raw, dict):
+        warnings.append(f"Ignored config section {name!r}: expected an object")
+        return factory()
+    known = {f.name for f in fields(factory)}
+    unknown = sorted(set(raw) - known)
+    if unknown:
+        warnings.append(f"Ignored unknown {name} config keys: {', '.join(unknown)}")
+    return factory(**{key: value for key, value in raw.items() if key in known})
 
 
 def _expand_home(path: str) -> str:

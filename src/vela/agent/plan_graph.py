@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import operator
 import os
+import sqlite3
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
@@ -242,13 +243,13 @@ class LangGraphPlanAgent:
         final_text = str(values.get("final_text") or "")
         if final_text:
             self.history.append(Message(role="assistant", content=final_text))
-        self._delete_terminal_journal(values)
+        cleanup_warning = self._delete_terminal_journal(values)
         if values.get("status") == "cancelled":
             raise TaskCancelledError(final_text or "计划已取消")
 
         usage = _sum_usage(values.get("usage_events") or [])
         turns = sum(int(result.get("turns") or 0) for result in values.get("task_results") or [])
-        return {
+        event: AgentEvent = {
             "type": "done",
             "total_turns": turns,
             "total_tokens": usage.total_tokens,
@@ -259,18 +260,29 @@ class LangGraphPlanAgent:
                 "status": values.get("status"),
             },
         }
+        if cleanup_warning:
+            event["warning"] = cleanup_warning
+        return event
 
-    def _delete_terminal_journal(self, values: dict[str, Any]) -> None:
+    def _delete_terminal_journal(self, values: dict[str, Any]) -> str | None:
+        """Drop the finished plan's tool journal, reporting storage cleanup failures.
+
+        A leftover journal only wastes space, so a failure must not fail the run,
+        but it is reported instead of suppressed because it means the next plan
+        may see stale execution records.
+        """
         terminal = values.get("status") in {"cancelled", "completed", "failed"}
         if not self._persistent or not terminal:
-            return
+            return None
         plan_id = str(dict(values.get("plan") or {}).get("id") or "")
         journal_path = Path(self.config.tools.execution_journal_path).expanduser()
-        if plan_id and journal_path.exists():
-            with suppress(Exception):
-                ToolExecutionJournal(journal_path).delete_scope_prefix(
-                    f"{self.thread_id}:{plan_id}:"
-                )
+        if not plan_id or not journal_path.exists():
+            return None
+        try:
+            ToolExecutionJournal(journal_path).delete_scope_prefix(f"{self.thread_id}:{plan_id}:")
+        except (OSError, sqlite3.Error) as exc:
+            return f"Tool journal cleanup failed for plan {plan_id}: {exc}"
+        return None
 
     def _build_graph(self, checkpointer: AsyncSqliteSaver | InMemorySaver):
         builder = StateGraph(PlanGraphState)

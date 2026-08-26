@@ -169,6 +169,9 @@ class RichRenderer:
             self._flush_thinking()
             self._flush_markdown(title="Final Output")
             self._record_run_summary(event)
+            warning = str(event.get("warning") or "")
+            if warning:
+                self.console.print(Text(warning, style="yellow"))
         elif event_type == "run_finished":
             self._print_run_finished(event)
 
