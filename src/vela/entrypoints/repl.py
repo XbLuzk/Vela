@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -35,6 +34,7 @@ from vela.render import RichRenderer
 from vela.run_trace import RunTraceStore
 from vela.session import ActiveSession
 from vela.skill import SkillRegistry
+from vela.storage import user_state_path
 from vela.task_control import InteractiveTaskController, TaskState
 from vela.tools import ToolRegistry
 
@@ -101,7 +101,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         else:
             console.print(f"No previous session found. Started {active_session.current.id}.")
 
-    history_path = Path.home() / ".vela" / "history" / "prompt_history.txt"
+    history_path = user_state_path("history", "prompt_history.txt")
     history_path.parent.mkdir(parents=True, exist_ok=True)
 
     def status_provider() -> list[tuple[str, str]]:

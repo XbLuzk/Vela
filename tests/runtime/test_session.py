@@ -276,7 +276,7 @@ def test_active_session_falls_back_to_memory_when_permissions_cannot_be_enforced
     def reject_chmod(path, mode):  # noqa: ARG001
         raise PermissionError("chmod rejected")
 
-    monkeypatch.setattr("vela.session.os.chmod", reject_chmod)
+    monkeypatch.setattr("vela.storage.os.chmod", reject_chmod)
 
     active = ActiveSession.open(tmp_path / "project")
 

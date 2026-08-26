@@ -38,23 +38,10 @@ async def run_agent_with_session(
             task_controller,
         )
     except asyncio.CancelledError:
-        agent.history = finalize_interrupted_history(agent.history, status="cancelled")
-        trace = getattr(agent, "last_run_trace", None)
-        if trace is not None:
-            renderer.handle(
-                trace_finished_event(
-                    trace,
-                    warning=getattr(agent, "last_run_trace_warning", None),
-                )
-            )
-            renderer.newline()
+        _finalize_cancelled(agent, renderer)
         raise
     except BaseException as exc:
-        agent.history = finalize_interrupted_history(
-            agent.history,
-            status="failed",
-            detail=str(exc),
-        )
+        _finalize_failed(agent, exc)
         raise
     finally:
         active_session.save(agent.history, title=message)
@@ -142,28 +129,39 @@ async def run_delegated_with_session(
     except asyncio.CancelledError:
         if delegated_agent.history:
             agent.history = [*previous_history, *delegated_agent.history]
-        agent.history = finalize_interrupted_history(agent.history, status="cancelled")
-        if getattr(agent, "last_run_trace", None) is not None:
-            run_renderer.handle(
-                trace_finished_event(
-                    agent.last_run_trace,
-                    warning=getattr(agent, "last_run_trace_warning", None),
-                )
-            )
-            run_renderer.newline()
+        _finalize_cancelled(agent, run_renderer)
         raise
     except BaseException as exc:
         if delegated_agent.history:
             agent.history = [*previous_history, *delegated_agent.history]
-        agent.history = finalize_interrupted_history(
-            agent.history,
-            status="failed",
-            detail=str(exc),
-        )
+        _finalize_failed(agent, exc)
         raise
     finally:
         active_session.save(agent.history, title=message)
         print_session_warning(console, active_session)
+
+
+def _finalize_cancelled(agent: Agent, renderer: RichRenderer) -> None:
+    """Close the cancelled transcript and render its Trace summary if one exists."""
+    agent.history = finalize_interrupted_history(agent.history, status="cancelled")
+    trace = getattr(agent, "last_run_trace", None)
+    if trace is None:
+        return
+    renderer.handle(
+        trace_finished_event(
+            trace,
+            warning=getattr(agent, "last_run_trace_warning", None),
+        )
+    )
+    renderer.newline()
+
+
+def _finalize_failed(agent: Agent, error: BaseException) -> None:
+    agent.history = finalize_interrupted_history(
+        agent.history,
+        status="failed",
+        detail=str(error),
+    )
 
 
 def print_session_warning(console: Console, active_session: ActiveSession) -> None:

@@ -8,8 +8,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
-from filelock import FileLock, Timeout
-
 from vela.events import (
     RunStatus,
     RunTracePayload,
@@ -18,6 +16,13 @@ from vela.events import (
     TraceSpanStatus,
 )
 from vela.run_trace.models import RunTrace
+from vela.storage import (
+    PRIVATE_FILE_MODE,
+    ensure_private_dir,
+    exclusive_lock,
+    set_private_mode,
+    user_state_path,
+)
 from vela.types import Usage
 
 
@@ -29,23 +34,20 @@ class RunTraceStore:
     """Append and query completed traces without loading the whole file."""
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self.path = Path(path or Path.home() / ".vela" / "runs.jsonl").expanduser()
+        self.path = Path(path or user_state_path("runs.jsonl")).expanduser()
         self.last_warning: str | None = None
 
     def append(self, trace: RunTrace) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        ensure_private_dir(self.path.parent)
         payload = (json.dumps(trace.to_dict(), ensure_ascii=False) + "\n").encode("utf-8")
-        try:
-            with FileLock(f"{self.path}.lock", timeout=5):
-                self._append_locked(payload)
-        except Timeout as exc:
-            raise OSError("Run trace store is busy") from exc
+        with exclusive_lock(self.path, busy_message="Run trace store is busy"):
+            self._append_locked(payload)
 
     def _append_locked(self, payload: bytes) -> None:
-        descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, PRIVATE_FILE_MODE)
         original_size = 0
         try:
-            os.chmod(self.path, 0o600)
+            set_private_mode(self.path, PRIVATE_FILE_MODE)
             original_size = os.lseek(descriptor, 0, os.SEEK_END)
             separator = b""
             if original_size:

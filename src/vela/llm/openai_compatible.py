@@ -228,21 +228,23 @@ async def _iter_sse(response: httpx.Response) -> AsyncIterator[str]:
         buffer += text
         while "\n\n" in buffer:
             event, buffer = buffer.split("\n\n", 1)
-            data_lines = []
-            for line in event.splitlines():
-                line = line.strip()
-                if line.startswith("data:"):
-                    data_lines.append(line[5:].strip())
-            if data_lines:
-                yield "\n".join(data_lines)
+            payload = _sse_payload(event)
+            if payload is not None:
+                yield payload
     if buffer.strip():
-        data_lines = []
-        for line in buffer.splitlines():
-            line = line.strip()
-            if line.startswith("data:"):
-                data_lines.append(line[5:].strip())
-        if data_lines:
-            yield "\n".join(data_lines)
+        payload = _sse_payload(buffer)
+        if payload is not None:
+            yield payload
+
+
+def _sse_payload(event: str) -> str | None:
+    """Join the ``data:`` lines of one SSE event block, or ``None`` when it has none."""
+    data_lines = [
+        stripped[5:].strip()
+        for stripped in (line.strip() for line in event.splitlines())
+        if stripped.startswith("data:")
+    ]
+    return "\n".join(data_lines) if data_lines else None
 
 
 def _map_finish_reason(reason: str) -> str:

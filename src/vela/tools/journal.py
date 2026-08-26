@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from vela.storage import apply_sqlite_pragmas, ensure_private_file
 from vela.tools.base import ToolResult
 
 JournalStatus = Literal["running", "completed", "uncertain"]
@@ -172,14 +172,9 @@ class ToolExecutionJournal:
         return int(cursor.rowcount)
 
     def _initialize(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.path.parent, 0o700)
-        descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        os.close(descriptor)
-        os.chmod(self.path, 0o600)
+        ensure_private_file(self.path)
         with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA busy_timeout=5000")
+            apply_sqlite_pragmas(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tool_executions (

@@ -14,7 +14,7 @@ from vela.entrypoints.model_command import handle_model_command
 from vela.entrypoints.repl_tasks import print_session_warning, start_plan
 from vela.entrypoints.repl_ui import PermissionMode, permission_mode_label
 from vela.entrypoints.trace_command import parse_trace_args, show_run_traces
-from vela.memory import MemoryManager
+from vela.memory import MemoryManager, memory_manager_for
 from vela.policy import AuditLog
 from vela.run_trace import RunTraceStore
 from vela.session import ActiveSession
@@ -201,12 +201,7 @@ def _resume_command(reference: str, runtime: ReplRuntime) -> None:
 def handle_context_command(command: str, arg: str, runtime: ReplRuntime) -> None:
     config = runtime.config
     try:
-        manager = MemoryManager(
-            config.memory.long_term_db_path,
-            scope=runtime.cwd,
-            max_entries=config.memory.max_long_term_entries,
-            max_content_length=config.memory.max_memory_chars,
-        )
+        manager = memory_manager_for(config, runtime.cwd)
     except RuntimeError as exc:
         runtime.console.print(f"[red]Memory unavailable:[/red] {exc}")
         return

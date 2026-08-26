@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import sqlite3
 from dataclasses import asdict, dataclass, field
@@ -12,6 +11,12 @@ from typing import Any
 from vela.session_history import (
     bounded_tool_transcript,
     finalize_interrupted_history,
+)
+from vela.storage import (
+    PRIVATE_FILE_MODE,
+    ensure_private_dir,
+    set_private_mode,
+    user_state_path,
 )
 from vela.types import Message
 
@@ -135,10 +140,9 @@ class ActiveSession:
 
 class SessionStore:
     def __init__(self, db_path: str | Path | None = None):
-        self.db_path = Path(db_path or Path.home() / ".vela" / "sessions" / "sessions.db")
+        self.db_path = Path(db_path or user_state_path("sessions", "sessions.db"))
         self.db_path = self.db_path.expanduser()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        _set_private_mode(self.db_path.parent, 0o700)
+        ensure_private_dir(self.db_path.parent, verify=True)
         self._ensure_schema()
         self._secure_storage()
 
@@ -311,20 +315,14 @@ class SessionStore:
             Path(f"{self.db_path}-shm"),
         ):
             if path.exists():
-                _set_private_mode(path, 0o600)
+                set_private_mode(path, PRIVATE_FILE_MODE, verify=True)
 
 
 def _record(row: sqlite3.Row) -> SessionRecord:
     raw_messages = json.loads(row["messages_json"])
-    return SessionRecord(
-        id=str(row["id"]),
-        cwd=str(row["cwd"]),
-        created_at=str(row["created_at"]),
-        updated_at=str(row["updated_at"]),
-        title=str(row["title"]),
-        message_count=int(row["message_count"]),
-        messages=[_message(item) for item in raw_messages],
-    )
+    record = _metadata_record(row)
+    record.messages = [_message(item) for item in raw_messages]
+    return record
 
 
 def _metadata_record(row: sqlite3.Row) -> SessionRecord:
@@ -373,12 +371,6 @@ def _clean_title(value: str) -> str:
 
 def _scope(cwd: str | Path) -> str:
     return str(Path(cwd).expanduser().resolve())
-
-
-def _set_private_mode(path: Path, mode: int) -> None:
-    os.chmod(path, mode)
-    if os.name == "posix" and path.stat().st_mode & 0o777 != mode:
-        raise PermissionError(f"Could not secure session storage path: {path}")
 
 
 def _ephemeral_record(cwd: str | Path) -> SessionRecord:

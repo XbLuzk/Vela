@@ -7,6 +7,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from vela.storage import user_state_path, vela_dir
+
 
 @dataclass(slots=True)
 class Skill:
@@ -100,8 +102,8 @@ class SkillRegistry:
         self.project_root = Path(project_root).resolve()
         package_root = Path(__file__).resolve().parents[1]
         self.builtin_root = Path(builtin_root or package_root / "builtin_skills")
-        self.user_root = Path(user_root or Path.home() / ".vela" / "skills")
-        self.project_skill_root = self.project_root / ".vela" / "skills"
+        self.user_root = Path(user_root or user_state_path("skills"))
+        self.project_skill_root = vela_dir(self.project_root) / "skills"
         self.include_project = include_project
         self._skills: dict[str, Skill] | None = None
 
