@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from vela.run_trace.context import current_run_id
+from vela.storage import PRIVATE_FILE_MODE, ensure_private_file
 
 SENSITIVE_KEYS = ("token", "key", "password", "secret", "authorization", "bearer")
 _SECRET_VALUE_PATTERNS = (
     re.compile(r"(?i)\b(?:bearer|basic)\s+[\w\-.~+/=]{8,}"),
     re.compile(r"(?i)\b[\w.-]*(?:token|key|password|passwd|secret)[\w.-]*\s*[=:]\s*\S+"),
     re.compile(r"\b(?:sk|pk|rk|gh[pousr]|xox[abposr])[-_][A-Za-z0-9_\-]{16,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{16,}"),
 )
 
 
@@ -52,6 +54,8 @@ class AuditLog:
         than looking like an empty one.
         """
         self.last_warning = None
+        if limit < 1:
+            return []
         if not self.path.exists():
             return []
         try:
@@ -75,10 +79,12 @@ class AuditLog:
 
     def _open_private(self):
         """Append to an owner-only log file inside an owner-only directory."""
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.path.parent, 0o700)
-        descriptor = os.open(self.path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        os.chmod(self.path, 0o600)
+        ensure_private_file(self.path)
+        descriptor = os.open(
+            self.path,
+            os.O_CREAT | os.O_WRONLY | os.O_APPEND,
+            PRIVATE_FILE_MODE,
+        )
         return os.fdopen(descriptor, "a", encoding="utf-8", closefd=True)
 
     def _redact(self, value: Any) -> Any:

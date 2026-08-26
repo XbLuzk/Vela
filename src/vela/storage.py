@@ -66,29 +66,53 @@ def set_private_mode(path: str | Path, mode: int, *, verify: bool = False) -> No
 
 def ensure_private_dir(path: str | Path, *, verify: bool = False) -> Path:
     """Create ``path`` and its parents as an owner-only directory."""
-    directory = Path(path)
+    directory = Path(path).expanduser()
+    missing: list[Path] = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
     directory.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
-    set_private_mode(directory, PRIVATE_DIR_MODE, verify=verify)
+
+    targets = [directory, *missing]
+    if VELA_DIR_NAME in directory.parts:
+        current = directory
+        while current.name != VELA_DIR_NAME and current.parent != current:
+            current = current.parent
+            targets.append(current)
+    for target in dict.fromkeys(reversed(targets)):
+        set_private_mode(target, PRIVATE_DIR_MODE, verify=verify)
     return directory
 
 
 def ensure_private_file(path: str | Path, *, verify: bool = False) -> Path:
     """Create ``path`` and its private parent directory as an owner-only file."""
-    target = Path(path)
+    target = Path(path).expanduser()
     ensure_private_dir(target.parent, verify=verify)
     descriptor = os.open(target, os.O_CREAT | os.O_RDWR, PRIVATE_FILE_MODE)
-    os.close(descriptor)
-    set_private_mode(target, PRIVATE_FILE_MODE, verify=verify)
+    try:
+        set_private_mode(target, PRIVATE_FILE_MODE, verify=verify)
+    finally:
+        os.close(descriptor)
     return target
 
 
 def write_private_text(path: str | Path, text: str) -> None:
     """Replace ``path`` with ``text`` atomically, keeping owner-only permissions."""
-    target = Path(path)
+    target = Path(path).expanduser()
+    ensure_private_dir(target.parent)
     temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary.write_text(text, encoding="utf-8")
-        set_private_mode(temporary, PRIVATE_FILE_MODE)
+        descriptor = os.open(
+            temporary,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            PRIVATE_FILE_MODE,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=True) as handle:
+            handle.write(text)
         temporary.replace(target)
         set_private_mode(target, PRIVATE_FILE_MODE)
     finally:
@@ -103,8 +127,11 @@ def exclusive_lock(
     timeout: float = DEFAULT_LOCK_TIMEOUT,
 ) -> Iterator[None]:
     """Hold ``<path>.lock`` exclusively, reporting contention as ``OSError``."""
+    lock_path = Path(f"{path}.lock")
+    ensure_private_file(lock_path)
     try:
-        with FileLock(f"{path}.lock", timeout=timeout):
+        with FileLock(lock_path, timeout=timeout):
+            set_private_mode(lock_path, PRIVATE_FILE_MODE)
             yield
     except Timeout as exc:
         raise OSError(busy_message) from exc

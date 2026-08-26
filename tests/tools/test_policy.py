@@ -30,7 +30,10 @@ def test_audit_log_redacts_secret_values_inside_strings(tmp_path):
         input_data={
             "command": "curl -H 'Authorization: Bearer abcdef1234567890' https://x",
             "api_key": "plain-secret",
-            "notes": ["export OPENAI_TOKEN=sk-abcdefghij1234567890"],
+            "notes": [
+                "export OPENAI_TOKEN=sk-abcdefghij1234567890",
+                "github_pat_abcdefghijklmnopqrstuvwxyz123456",
+            ],
         },
         outcome="approved",
         approver="user",
@@ -41,6 +44,7 @@ def test_audit_log_redacts_secret_values_inside_strings(tmp_path):
     assert recorded["api_key"] == "***"
     assert "abcdef1234567890" not in recorded["command"]
     assert "sk-abcdefghij1234567890" not in recorded["notes"][0]
+    assert "github_pat_" not in recorded["notes"][1]
 
 
 def test_audit_log_file_and_directory_are_owner_only(tmp_path):

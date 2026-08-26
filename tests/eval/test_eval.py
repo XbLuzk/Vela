@@ -324,9 +324,14 @@ def test_eval_compare_command_fails_when_a_case_regresses(tmp_path) -> None:
     assert json.loads(result.stdout)["regressions"] == ["case-a"]
 
 
-def test_eval_run_requires_explicit_trust_for_custom_suite(tmp_path, monkeypatch) -> None:
+def test_eval_run_requires_explicit_trust_for_custom_suite(tmp_path, monkeypatch, capsys) -> None:
     suite = tmp_path / "suite.json"
     suite.write_text("{}", encoding="utf-8")
+    home = tmp_path / "home"
+    config_dir = home / ".vela"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("VELA_API_KEY", "test")
 
     with pytest.raises(typer.BadParameter, match="--allow-code-execution"):
@@ -337,6 +342,7 @@ def test_eval_run_requires_explicit_trust_for_custom_suite(tmp_path, monkeypatch
             workspace=None,
             allow_code_execution=False,
         )
+    assert "Config warning:" in capsys.readouterr().err
 
 
 def _result(*, passed: dict[str, bool], tokens: int) -> SuiteResult:

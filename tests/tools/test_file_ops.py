@@ -330,7 +330,7 @@ def test_directory_tree_ignores_unreadable_directories(tmp_path, monkeypatch):
     result = fops.directory_tree(str(tmp_path), "root")
 
     assert not result.is_error
-    assert result.content == "root/"
+    assert result.content == "root/\n\n(skipped 1 unreadable directory: .: permission denied)"
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +377,7 @@ def test_grep_rejects_invalid_regex_and_skips_unreadable_files(tmp_path, monkeyp
     skipped = fops.grep(str(tmp_path), "value")
 
     assert not skipped.is_error
-    assert skipped.content == "(no matches)"
+    assert skipped.content == "(no matches)\n\n(skipped 1 unreadable file: a.txt: device error)"
 
 
 def test_grep_skips_files_inside_skipped_directories(tmp_path):

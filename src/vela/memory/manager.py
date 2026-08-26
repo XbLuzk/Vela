@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -11,6 +10,7 @@ from typing import Any
 from vela.config import VelaConfig
 from vela.memory.models import MemoryEntry
 from vela.memory.ranking import normalize_text, parse_timestamp, relevance_score
+from vela.storage import PRIVATE_FILE_MODE, ensure_private_file, set_private_mode
 
 DEFAULT_MAX_ENTRIES_PER_SCOPE = 1_000
 DEFAULT_MAX_CONTENT_LENGTH = 8_000
@@ -48,8 +48,7 @@ class MemoryManager:
         self.scope = str(scope)
         self.max_entries = _positive_int(max_entries, "max_entries")
         self.max_content_length = _positive_int(max_content_length, "max_content_length")
-        self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.db_path.parent, 0o700)
+        ensure_private_file(self.db_path)
         self._ensure_schema()
         self._secure_storage()
 
@@ -412,7 +411,7 @@ class MemoryManager:
             Path(f"{self.db_path}-shm"),
         ):
             if path.exists():
-                os.chmod(path, 0o600)
+                set_private_mode(path, PRIVATE_FILE_MODE)
 
 
 def memory_manager_for(config: VelaConfig, cwd: str | Path) -> MemoryManager:

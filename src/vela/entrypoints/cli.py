@@ -301,7 +301,14 @@ def eval_run(
     """Run fixed tasks and record success, latency, tokens, and tool calls."""
     root = (cwd or Path.cwd()).resolve()
     project_trusted = _resolve_cli_project_trust(root, interactive=False, override=None)
-    config = load_config(project_root=root, include_project=project_trusted)
+    config_warnings: list[str] = []
+    config = load_config(
+        project_root=root,
+        include_project=project_trusted,
+        warnings=config_warnings,
+    )
+    for warning in config_warnings:
+        typer.echo(f"Config warning: {warning}", err=True)
     if not config.llm.api_key:
         raise typer.BadParameter("LLM API key is required to run an evaluation")
     if suite is not None and not allow_code_execution:

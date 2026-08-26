@@ -28,6 +28,17 @@ def test_ensure_private_dir_creates_owner_only_tree(tmp_path):
 
     assert directory.is_dir()
     assert _mode(directory) == PRIVATE_DIR_MODE
+    assert _mode(directory.parent) == PRIVATE_DIR_MODE
+
+
+def test_ensure_private_dir_repairs_existing_vela_parent(tmp_path):
+    vela_home = tmp_path / ".vela"
+    vela_home.mkdir(mode=0o755)
+
+    directory = ensure_private_dir(vela_home / "sessions", verify=True)
+
+    assert _mode(vela_home) == PRIVATE_DIR_MODE
+    assert _mode(directory) == PRIVATE_DIR_MODE
 
 
 def test_ensure_private_file_creates_file_and_parent(tmp_path):
@@ -57,13 +68,32 @@ def test_set_private_mode_verify_reports_rejected_chmod(tmp_path, monkeypatch):
 
 
 def test_write_private_text_replaces_atomically(tmp_path):
-    target = tmp_path / "trust.json"
+    target = tmp_path / "private" / "trust.json"
     write_private_text(target, "first")
     write_private_text(target, "second")
 
     assert target.read_text(encoding="utf-8") == "second"
     assert _mode(target) == PRIVATE_FILE_MODE
-    assert list(tmp_path.iterdir()) == [target]
+    assert _mode(target.parent) == PRIVATE_DIR_MODE
+    assert list(target.parent.iterdir()) == [target]
+
+
+def test_write_private_text_creates_temporary_file_as_private(tmp_path, monkeypatch):
+    calls: list[tuple[int, int]] = []
+    real_open = os.open
+
+    def tracked_open(path, flags, mode=0o777):
+        calls.append((flags, mode))
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr("vela.storage.os.open", tracked_open)
+
+    write_private_text(tmp_path / "trust.json", "secret")
+
+    flags, mode = calls[-1]
+    assert flags & os.O_CREAT
+    assert flags & os.O_EXCL
+    assert mode == PRIVATE_FILE_MODE
 
 
 def test_exclusive_lock_reports_contention_as_oserror(tmp_path):

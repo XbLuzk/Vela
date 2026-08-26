@@ -127,3 +127,4 @@ def test_tail_returns_the_most_recent_events_and_skips_corrupt_lines(tmp_path):
 
     assert [event["tool_name"] for event in log.tail()] == ["tool_0", "tool_1", "tool_2"]
     assert [event["tool_name"] for event in log.tail(limit=2)] == ["tool_2"]
+    assert log.tail(limit=0) == []
