@@ -56,7 +56,7 @@ def write_chrome_devtools_config(
 ) -> Path:
     root = Path(scope_root).resolve() if scope_root else Path.home()
     config_dir = root / ".vela"
-    config_dir.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = config_dir / "mcp.json"
     data = _read_json(path) or {"mcpServers": {}}
     servers = data.setdefault("mcpServers", {})
@@ -74,8 +74,16 @@ def write_chrome_devtools_config(
         "command": "npx",
         "args": args,
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_private(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     return path
+
+
+def _write_private(path: Path, content: str) -> None:
+    """Write MCP configuration, which may hold credentials, as an owner-only file."""
+    descriptor = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    os.chmod(path, 0o600)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:

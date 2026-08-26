@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import stat
 
 from vela.config import load_config
 from vela.mcp import McpClientManager, load_mcp_server_specs
 from vela.mcp.client import _stdio_environment
+from vela.mcp.config import write_chrome_devtools_config
 from vela.tools.base import ToolContext
 
 
@@ -151,3 +153,10 @@ def test_untrusted_mcp_manager_does_not_register_builtin_code_rag(tmp_path, monk
     manager = McpClientManager(tmp_path, include_project=False)
 
     assert "code-rag" not in manager.specs
+
+
+def test_generated_mcp_config_is_owner_only(tmp_path):
+    path = write_chrome_devtools_config(scope_root=tmp_path)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
