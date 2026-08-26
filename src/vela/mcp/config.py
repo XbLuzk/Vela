@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from vela.storage import user_state_path, vela_dir
+from vela.storage import ensure_private_dir, user_state_path, vela_dir, write_private_text
 
 
 @dataclass(slots=True)
@@ -58,7 +58,7 @@ def write_chrome_devtools_config(
 ) -> Path:
     root = Path(scope_root).resolve() if scope_root else Path.home()
     config_dir = vela_dir(root)
-    config_dir.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(config_dir)
     path = config_dir / "mcp.json"
     data = _read_json(path) or {"mcpServers": {}}
     servers = data.setdefault("mcpServers", {})
@@ -76,7 +76,7 @@ def write_chrome_devtools_config(
         "command": "npx",
         "args": args,
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_private_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     return path
 
 

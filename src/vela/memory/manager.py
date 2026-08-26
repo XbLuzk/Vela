@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -47,8 +48,10 @@ class MemoryManager:
         self.scope = str(scope)
         self.max_entries = _positive_int(max_entries, "max_entries")
         self.max_content_length = _positive_int(max_content_length, "max_content_length")
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.db_path.parent, 0o700)
         self._ensure_schema()
+        self._secure_storage()
 
     def save(
         self,
@@ -397,7 +400,19 @@ class MemoryManager:
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("pragma busy_timeout = 30000")
+        self._secure_storage()
         return conn
+
+    def _secure_storage(self) -> None:
+        """Keep long-term memory and its SQLite sidecars readable only by the owner."""
+        for path in (
+            self.db_path,
+            Path(f"{self.db_path}-journal"),
+            Path(f"{self.db_path}-wal"),
+            Path(f"{self.db_path}-shm"),
+        ):
+            if path.exists():
+                os.chmod(path, 0o600)
 
 
 def memory_manager_for(config: VelaConfig, cwd: str | Path) -> MemoryManager:

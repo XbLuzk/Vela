@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -49,6 +50,16 @@ class OpenAICompatibleClient:
                 "error": RuntimeError(
                     "VELA_API_KEY is not configured. Set it in env, ~/.vela/config.json, "
                     "or project .vela/config.json."
+                ),
+            }
+            return
+
+        if not _is_secure_endpoint(self.base_url):
+            yield {
+                "type": "error",
+                "error": RuntimeError(
+                    f"Refusing to send the API key to {self.base_url} over cleartext HTTP. "
+                    "Use an https:// base URL, or a loopback host for local proxies."
                 ),
             }
             return
@@ -205,6 +216,17 @@ class OpenAICompatibleClient:
         usage = chunk.get("usage")
         if isinstance(usage, dict):
             yield {"type": "usage", "usage": Usage.from_mapping(usage).to_dict()}
+
+
+def _is_secure_endpoint(base_url: str) -> bool:
+    """Allow https, plus http only for loopback hosts used by local proxies."""
+    parsed = urlparse(base_url)
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme != "http":
+        return False
+    host = (parsed.hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1"}
 
 
 def _is_context_overflow(response: httpx.Response) -> bool:

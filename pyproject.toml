@@ -36,6 +36,9 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 package = true
+# Security floor for a transitive dependency: cryptography < 50.0.0 is affected by
+# PYSEC-2026-3552.
+constraint-dependencies = ["cryptography>=50.0.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vela", "src/vela_rag"]

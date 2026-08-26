@@ -203,3 +203,40 @@ def _client() -> OpenAICompatibleClient:
         api_key="key",
         base_url="https://api.deepseek.com/v1",
     )
+
+
+def test_cleartext_base_url_is_refused_before_sending_the_key(monkeypatch) -> None:
+    def fail_stream(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+        raise AssertionError("no request should be sent to a cleartext endpoint")
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fail_stream)
+    client = OpenAICompatibleClient(
+        provider_name="deepseek",
+        model="deepseek-v4-flash",
+        api_key="key",
+        base_url="http://api.deepseek.com/v1",
+    )
+
+    events = asyncio.run(_collect_chat_events(client))
+
+    assert len(events) == 1
+    assert "cleartext HTTP" in str(events[0]["error"])
+
+
+def test_loopback_base_url_is_allowed_for_local_proxies(monkeypatch) -> None:
+    def fail_stream(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+        request = httpx.Request("POST", "http://localhost:8000/v1/chat/completions")
+        raise httpx.ConnectError("no local proxy", request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fail_stream)
+    client = OpenAICompatibleClient(
+        provider_name="deepseek",
+        model="deepseek-v4-flash",
+        api_key="key",
+        base_url="http://localhost:8000/v1",
+    )
+
+    events = asyncio.run(_collect_chat_events(client))
+
+    assert events[0]["type"] == "message_start"
+    assert "Could not connect" in str(events[-1]["error"])

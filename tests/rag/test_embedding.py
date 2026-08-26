@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from vela_rag.embedding import OpenAIEmbeddingClient, embedding_client_from_env
 
 
@@ -51,3 +53,18 @@ def test_embedding_client_from_environment_requires_key_and_model(monkeypatch) -
 
     assert isinstance(client, OpenAIEmbeddingClient)
     assert client.identity == "https://embedding.example/v1|embed-model"
+
+
+def test_cleartext_embedding_endpoint_is_refused(monkeypatch) -> None:
+    monkeypatch.setenv("VELA_RAG_EMBEDDING_API_KEY", "secret")
+    monkeypatch.setenv("VELA_RAG_EMBEDDING_MODEL", "embed-model")
+    monkeypatch.setenv("VELA_RAG_EMBEDDING_BASE_URL", "http://embedding.example/v1")
+
+    assert embedding_client_from_env() is None
+
+    with pytest.raises(ValueError, match="cleartext HTTP"):
+        OpenAIEmbeddingClient(
+            api_key="secret",
+            base_url="http://embedding.example/v1",
+            model="embed-model",
+        )
