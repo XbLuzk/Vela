@@ -28,24 +28,39 @@ def load_mcp_server_specs(
     project_root: str | Path,
     *,
     include_project: bool = True,
+    warnings: list[str] | None = None,
 ) -> dict[str, McpServerSpec]:
+    """Load MCP server specs, reporting configs and entries that had to be skipped.
+
+    A broken ``mcp.json`` or a single malformed server entry must not take down
+    the whole agent, so the offending part is skipped and described in
+    *warnings*; without that the servers would just silently disappear.
+    """
+    sink = warnings if warnings is not None else []
     root = Path(project_root).resolve()
     merged: dict[str, Any] = {}
     paths = [user_state_path("mcp.json")]
     if include_project:
         paths.append(vela_dir(root) / "mcp.json")
     for path in paths:
-        data = _read_json(path)
+        data = _read_json(path, sink)
         if not data:
             continue
         servers = data.get("mcpServers", data)
         if isinstance(servers, dict):
             merged.update(servers)
-    return {
-        name: _spec_from_raw(name, raw, root)
-        for name, raw in merged.items()
-        if isinstance(raw, dict)
-    }
+        else:
+            sink.append(f"Ignored MCP config {path}: mcpServers must be an object")
+    specs: dict[str, McpServerSpec] = {}
+    for name, raw in merged.items():
+        if not isinstance(raw, dict):
+            sink.append(f"Ignored MCP server {name}: entry must be an object")
+            continue
+        try:
+            specs[name] = _spec_from_raw(name, raw, root)
+        except (TypeError, ValueError) as exc:
+            sink.append(f"Ignored MCP server {name}: invalid definition: {exc}")
+    return specs
 
 
 def write_chrome_devtools_config(
@@ -60,7 +75,7 @@ def write_chrome_devtools_config(
     config_dir = vela_dir(root)
     ensure_private_dir(config_dir)
     path = config_dir / "mcp.json"
-    data = _read_json(path) or {"mcpServers": {}}
+    data = _read_json(path, []) or {"mcpServers": {}}
     servers = data.setdefault("mcpServers", {})
     args = ["-y", "chrome-devtools-mcp@latest"]
     if no_usage_statistics:
@@ -80,14 +95,21 @@ def write_chrome_devtools_config(
     return path
 
 
-def _read_json(path: Path) -> dict[str, Any] | None:
+def _read_json(path: Path, warnings: list[str]) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError as exc:
+        warnings.append(f"Ignored MCP config {path}: {exc}")
         return None
-    return value if isinstance(value, dict) else None
+    except json.JSONDecodeError as exc:
+        warnings.append(f"Ignored MCP config {path}: invalid JSON at line {exc.lineno}: {exc.msg}")
+        return None
+    if not isinstance(value, dict):
+        warnings.append(f"Ignored MCP config {path}: expected a JSON object")
+        return None
+    return value
 
 
 def _spec_from_raw(name: str, raw: dict[str, Any], project_root: Path) -> McpServerSpec:

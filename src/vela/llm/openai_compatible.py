@@ -82,15 +82,44 @@ class OpenAICompatibleClient:
                 if response.is_error:
                     await response.aread()
                 response.raise_for_status()
+                produced = False
                 async for event in _iter_sse(response):
                     if event == "[DONE]":
                         break
                     try:
                         chunk = json.loads(event)
                     except json.JSONDecodeError:
-                        continue
+                        if not _looks_like_json(event):
+                            # Providers interleave non-JSON keep-alive payloads.
+                            continue
+                        yield {
+                            "type": "error",
+                            "error": RuntimeError(
+                                f"{self.provider_name} sent a malformed streaming payload; "
+                                "part of the response was lost. Retry the request."
+                            ),
+                        }
+                        return
+                    stream_error = _stream_error_message(chunk)
+                    if stream_error:
+                        yield {
+                            "type": "error",
+                            "error": RuntimeError(
+                                f"{self.provider_name} reported a streaming error: {stream_error}"
+                            ),
+                        }
+                        return
                     async for parsed in self._parse_chunk(chunk):
+                        produced = True
                         yield parsed
+                if not produced:
+                    yield {
+                        "type": "error",
+                        "error": RuntimeError(
+                            f"{self.provider_name} returned an empty response stream for model "
+                            f"{self.model}. Check model access and provider status, then retry."
+                        ),
+                    }
         except httpx.TimeoutException:
             yield {
                 "type": "error",
@@ -109,19 +138,22 @@ class OpenAICompatibleClient:
                     ),
                 }
                 return
+            detail = _response_detail(exc.response)
             yield {
                 "type": "error",
                 "error": RuntimeError(
                     f"{self.provider_name} API returned HTTP {exc.response.status_code}. "
                     "Check the API key, model access, account balance, and provider status."
+                    + (f" Provider said: {detail}" if detail else "")
                 ),
             }
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             yield {
                 "type": "error",
                 "error": RuntimeError(
                     f"Could not connect to {self.provider_name} at {self.base_url}. "
-                    "Check the network, VPN/proxy, and provider status, then retry."
+                    "Check the network, VPN/proxy, and provider status, then retry. "
+                    f"({type(exc).__name__}: {exc})"
                 ),
             }
 
@@ -227,6 +259,35 @@ def _is_secure_endpoint(base_url: str) -> bool:
         return False
     host = (parsed.hostname or "").lower()
     return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _looks_like_json(payload: str) -> bool:
+    return payload.lstrip()[:1] in {"{", "["}
+
+
+def _stream_error_message(chunk: Any) -> str:
+    """Return a human-readable message when a stream chunk carries a provider error."""
+    if not isinstance(chunk, dict):
+        return ""
+    error = chunk.get("error")
+    if isinstance(error, dict):
+        message = str(error.get("message") or "").strip()
+        code = str(error.get("code") or error.get("type") or "").strip()
+        if message and code:
+            return f"{message} (code {code})"
+        return message or code or json.dumps(error, ensure_ascii=False)[:200]
+    if isinstance(error, str) and error.strip():
+        return error.strip()
+    return ""
+
+
+def _response_detail(response: httpx.Response, limit: int = 200) -> str:
+    try:
+        text = response.text
+    except httpx.ResponseNotRead:
+        return ""
+    detail = " ".join(text.split())
+    return detail[:limit] if detail else ""
 
 
 def _is_context_overflow(response: httpx.Response) -> bool:

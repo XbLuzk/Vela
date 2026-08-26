@@ -230,9 +230,10 @@ async def handle_settings_command(command: str, arg: str, runtime: ReplRuntime) 
         )
     elif command == "/audit":
         limit = int(arg or "20") if (arg or "20").isdigit() else 20
-        runtime.console.print_json(
-            json.dumps(AuditLog(config.policy.audit_log_path).tail(limit), ensure_ascii=False)
-        )
+        audit_log = AuditLog(config.policy.audit_log_path)
+        runtime.console.print_json(json.dumps(audit_log.tail(limit), ensure_ascii=False))
+        if audit_log.last_warning:
+            runtime.console.print(f"[yellow]{audit_log.last_warning}[/yellow]")
     elif command == "/model":
         await handle_model_command(
             arg,
@@ -256,7 +257,23 @@ async def handle_settings_command(command: str, arg: str, runtime: ReplRuntime) 
     elif command == "/skill":
         _handle_skill(arg, runtime)
     else:
-        runtime.console.print(f"Use `{CLI_NAME} mcp list` to inspect configured MCP servers.")
+        _handle_mcp(runtime)
+
+
+def _handle_mcp(runtime: ReplRuntime) -> None:
+    """Show configured MCP servers together with config and load failures."""
+    manager = runtime.mcp_manager
+    if manager is None:
+        runtime.console.print(f"MCP is disabled. Use `{CLI_NAME} mcp list` to inspect config.")
+        return
+    for spec in manager.specs.values():
+        target = spec.url or f"{spec.command} {' '.join(spec.args)}".strip()
+        state = "enabled" if spec.enabled else "disabled"
+        runtime.console.print(f"{spec.name}\t{spec.type}\t{state}\t{target}")
+    for warning in getattr(manager, "config_warnings", []) or []:
+        runtime.console.print(f"[yellow]{warning}[/yellow]")
+    for name, error in (manager.last_errors or {}).items():
+        runtime.console.print(f"[yellow]MCP server {name} failed to load:[/yellow] {error}")
 
 
 def _show_context(runtime: ReplRuntime, memory_count: int) -> None:

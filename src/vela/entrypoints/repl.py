@@ -52,6 +52,7 @@ class ReplRuntime:
     renderer: RichRenderer
     active_session: ActiveSession
     task_controller: InteractiveTaskController
+    mcp_manager: Any = None
 
 
 # Startup ---------------------------------------------------------------------
@@ -71,6 +72,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         version=__version__,
         api_key_configured=bool(config.llm.api_key),
     )
+    _report_mcp_problems(console, mcp_manager)
     task_controller = InteractiveTaskController(
         on_error=lambda exc: console.print(f"[red]Task failed:[/red] {exc}")
     )
@@ -146,6 +148,7 @@ async def start_repl(cwd: str, config: VelaConfig, *, resume: bool = False) -> N
         renderer=renderer,
         active_session=active_session,
         task_controller=task_controller,
+        mcp_manager=mcp_manager,
     )
 
     with patch_stdout(raw=True):
@@ -270,6 +273,16 @@ async def _approval_prompt(
         permission_mode.set("auto")
         return "approve"
     return answer
+
+
+def _report_mcp_problems(console: Console, manager: Any) -> None:
+    """Show MCP config and startup failures that would otherwise be invisible here."""
+    if manager is None:
+        return
+    for warning in getattr(manager, "config_warnings", []) or []:
+        console.print(f"[yellow]{warning}[/yellow]")
+    for name, error in (getattr(manager, "last_errors", None) or {}).items():
+        console.print(f"[yellow]MCP server {name} failed to load:[/yellow] {error}")
 
 
 def _count_mcp_servers(manager: Any) -> int:

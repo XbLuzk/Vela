@@ -16,7 +16,7 @@ from tests.agent.plan_support import (
     _consume,
     _two_tool_registry,
 )
-from vela.agent import LangGraphPlanAgent
+from vela.agent import LangGraphPlanAgent, plan_graph
 from vela.config import load_config
 from vela.task_control import PlanReviewDecision
 from vela.tools import ToolRegistry
@@ -410,3 +410,31 @@ def test_one_shot_plan_does_not_create_orphan_tool_journal(tmp_path, monkeypatch
 
     assert any(event.get("type") == "done" for event in events)
     assert not journal_path.exists()
+
+
+def test_journal_cleanup_failure_is_reported_in_done_event(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = load_config(project_root=tmp_path)
+    journal_path = tmp_path / "tool-executions.sqlite"
+    journal_path.write_bytes(b"")
+    config.tools.execution_journal_path = str(journal_path)
+    agent = LangGraphPlanAgent(
+        llm_client=SingleTaskClient("任务"),
+        tool_registry=ToolRegistry(),
+        config=config,
+        cwd=str(tmp_path),
+        thread_id="cleanup-session",
+        checkpoint_path=tmp_path / "graph" / "cleanup.sqlite",
+    )
+
+    def fail(self, prefix):  # noqa: ANN001, ANN202, ARG001
+        raise OSError("journal is locked")
+
+    monkeypatch.setattr(plan_graph.ToolExecutionJournal, "delete_scope_prefix", fail)
+
+    event = agent._finish_graph(  # noqa: SLF001
+        {"status": "completed", "plan": {"id": "plan-1"}, "final_text": "done"}
+    )
+
+    assert "Tool journal cleanup failed for plan plan-1" in str(event["warning"])
+    assert "journal is locked" in str(event["warning"])

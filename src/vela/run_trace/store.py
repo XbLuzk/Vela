@@ -35,7 +35,16 @@ class RunTraceStore:
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path or user_state_path("runs.jsonl")).expanduser()
-        self.last_warning: str | None = None
+        self._warnings: dict[str, str] = {}
+
+    @property
+    def last_warning(self) -> str | None:
+        """Human-readable summary of everything the last query could not read."""
+        return "; ".join(self._warnings.values()) or None
+
+    @last_warning.setter
+    def last_warning(self, value: str | None) -> None:
+        self._warnings = {} if value is None else {"warning": value}
 
     def append(self, trace: RunTrace) -> None:
         ensure_private_dir(self.path.parent)
@@ -81,19 +90,27 @@ class RunTraceStore:
     def _iter_traces(self, *, max_scan_bytes: int | None = None) -> Iterator[RunTracePayload]:
         if not self.path.exists():
             return
+        skipped = 0
         try:
             for raw_line in _read_lines_newest_first(self.path, max_scan_bytes=max_scan_bytes):
                 try:
                     value = json.loads(raw_line.decode("utf-8"))
                 except (UnicodeError, json.JSONDecodeError):
+                    skipped += 1
+                    self._warnings["skipped"] = _skipped_warning(skipped)
                     continue
                 trace = _normalize_trace(value)
-                if trace is not None:
-                    yield trace
+                if trace is None:
+                    skipped += 1
+                    self._warnings["skipped"] = _skipped_warning(skipped)
+                    continue
+                yield trace
         except _TraceScanLimitReached:
-            self.last_warning = "Run trace scan limit reached; use a Run ID to search older records"
+            self._warnings["scan"] = (
+                "Run trace scan limit reached; use a Run ID to search older records"
+            )
         except OSError as exc:
-            self.last_warning = f"Run traces could not be read: {exc}"
+            self._warnings["read"] = f"Run traces could not be read: {exc}"
 
     def find(self, reference: str) -> RunTracePayload | None:
         self.last_warning = None
@@ -126,6 +143,11 @@ class RunTraceStore:
                     raise ValueError(f"Ambiguous Run ID prefix: {reference}")
                 match = trace
         return match
+
+
+def _skipped_warning(count: int) -> str:
+    suffix = "record" if count == 1 else "records"
+    return f"Skipped {count} corrupt run trace {suffix}"
 
 
 def _write_all(descriptor: int, payload: bytes) -> None:

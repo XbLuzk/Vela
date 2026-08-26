@@ -20,9 +20,11 @@ from vela.tools.base import Tool, ToolContext, ToolResult, object_schema
 class McpClientManager:
     def __init__(self, project_root: str | Path, *, include_project: bool = True):
         self.project_root = str(Path(project_root).resolve())
+        self.config_warnings: list[str] = []
         self.specs = load_mcp_server_specs(
             self.project_root,
             include_project=include_project,
+            warnings=self.config_warnings,
         )
         if include_project:
             self.specs["code-rag"] = _builtin_code_rag_spec(self.project_root)
