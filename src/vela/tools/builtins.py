@@ -4,7 +4,7 @@ import asyncio
 import os
 from typing import Any
 
-from vela.memory import MemoryManager
+from vela.memory import memory_manager_for
 from vela.policy import CommandGuard
 from vela.skill import SkillRegistry
 from vela.tools import file_ops as fops
@@ -411,12 +411,7 @@ async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
 async def _save_memory(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     if not context.config.features.memory:
         return ToolResult("Long-term memory is disabled.", is_error=True)
-    manager = MemoryManager(
-        context.config.memory.long_term_db_path,
-        scope=context.cwd,
-        max_entries=context.config.memory.max_long_term_entries,
-        max_content_length=context.config.memory.max_memory_chars,
-    )
+    manager = memory_manager_for(context.config, context.cwd)
     memory_id = manager.save(
         str(payload["content"]),
         kind=str(payload.get("kind") or "fact"),
@@ -434,12 +429,7 @@ async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolR
     raw_kinds = payload.get("kinds")
     if raw_kinds is not None and not isinstance(raw_kinds, list):
         return ToolResult("search_memory kinds must be an array of strings.", is_error=True)
-    manager = MemoryManager(
-        context.config.memory.long_term_db_path,
-        scope=context.cwd,
-        max_entries=context.config.memory.max_long_term_entries,
-        max_content_length=context.config.memory.max_memory_chars,
-    )
+    manager = memory_manager_for(context.config, context.cwd)
     rows = manager.recall(
         str(payload["query"]),
         limit=int(payload.get("limit") or context.config.memory.recall_limit),

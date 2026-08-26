@@ -5,7 +5,7 @@ from pathlib import Path
 
 from vela.branding import PRODUCT_NAME
 from vela.config import VelaConfig
-from vela.memory import MemoryManager
+from vela.memory import memory_manager_for
 from vela.trust import DEFAULT_PROJECT_INSTRUCTION_PATHS
 
 
@@ -114,12 +114,7 @@ class PromptAssembler:
     def _recalled_memories(self, user_message: str) -> str:
         if not user_message.strip() or not self.config.features.memory:
             return ""
-        manager = MemoryManager(
-            self.config.memory.long_term_db_path,
-            scope=self.cwd,
-            max_entries=self.config.memory.max_long_term_entries,
-            max_content_length=self.config.memory.max_memory_chars,
-        )
+        manager = memory_manager_for(self.config, self.cwd)
         memories = manager.recall(
             user_message,
             limit=self.config.memory.recall_limit,

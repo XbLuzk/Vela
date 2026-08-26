@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import operator
-import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
@@ -26,6 +25,7 @@ from vela.plan import ExecutionPlan, Planner, Task, TaskStatus, TaskType
 from vela.prompt import PromptAssembler
 from vela.session_history import bounded_tool_transcript
 from vela.skill import SkillContextBuffer
+from vela.storage import SQLITE_PRAGMAS, ensure_private_file, user_state_path
 from vela.task_control import (
     PlanReviewAction,
     PlanReviewDecision,
@@ -110,7 +110,7 @@ class LangGraphPlanAgent:
         self._persistent = thread_id is not None or checkpoint_path is not None
         self.thread_id = thread_id or str(uuid.uuid4())
         self.checkpoint_path = Path(
-            checkpoint_path or Path.home() / ".vela" / "langgraph" / "checkpoints.sqlite"
+            checkpoint_path or user_state_path("langgraph", "checkpoints.sqlite")
         ).expanduser()
         self.resume = resume
         self.history: list[Message] = []
@@ -556,14 +556,10 @@ async def _open_checkpointer(
     if path is None:
         yield InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=()))
         return
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path.parent, 0o700)
-    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-    os.close(descriptor)
-    os.chmod(path, 0o600)
+    ensure_private_file(path)
     async with aiosqlite.connect(path, timeout=5) as connection:
-        await connection.execute("PRAGMA journal_mode=WAL")
-        await connection.execute("PRAGMA busy_timeout=5000")
+        for pragma in SQLITE_PRAGMAS:
+            await connection.execute(f"PRAGMA {pragma}")
         serializer = JsonPlusSerializer(allowed_msgpack_modules=())
         yield AsyncSqliteSaver(connection, serde=serializer)
 

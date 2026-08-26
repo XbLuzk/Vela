@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
-import os
-import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from filelock import FileLock, Timeout
+from vela.storage import (
+    ensure_private_dir,
+    exclusive_lock,
+    user_state_path,
+    vela_dir,
+    write_private_text,
+)
 
 _TRUST_SENSITIVE_FILES = (
     Path(".env"),
@@ -29,7 +33,7 @@ class ProjectTrustStore:
     """Store exact, resolved project paths in a private user-level JSON file."""
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self.path = Path(path or Path.home() / ".vela" / "trust.json").expanduser()
+        self.path = Path(path or user_state_path("trust.json")).expanduser()
 
     def get(self, project_root: str | Path) -> bool | None:
         projects = self._read().get("projects", {})
@@ -37,19 +41,15 @@ class ProjectTrustStore:
         return value if isinstance(value, bool) else None
 
     def set(self, project_root: str | Path, trusted: bool) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.path.parent, 0o700)
-        try:
-            with FileLock(f"{self.path}.lock", timeout=5):
-                data = self._read()
-                projects = data.get("projects")
-                if not isinstance(projects, dict):
-                    projects = {}
-                    data["projects"] = projects
-                projects[_project_key(project_root)] = trusted
-                self._write(data)
-        except Timeout as exc:
-            raise OSError("Project trust store is busy") from exc
+        ensure_private_dir(self.path.parent)
+        with exclusive_lock(self.path, busy_message="Project trust store is busy"):
+            data = self._read()
+            projects = data.get("projects")
+            if not isinstance(projects, dict):
+                projects = {}
+                data["projects"] = projects
+            projects[_project_key(project_root)] = trusted
+            self._write(data)
 
     def _read(self) -> dict[str, object]:
         try:
@@ -59,17 +59,10 @@ class ProjectTrustStore:
         return value if isinstance(value, dict) else {"projects": {}}
 
     def _write(self, value: dict[str, object]) -> None:
-        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            temporary.write_text(
-                json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.chmod(temporary, 0o600)
-            temporary.replace(self.path)
-            os.chmod(self.path, 0o600)
-        finally:
-            temporary.unlink(missing_ok=True)
+        write_private_text(
+            self.path,
+            json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        )
 
 
 def resolve_project_trust(
@@ -101,7 +94,7 @@ def has_trust_sensitive_resources(project_root: str | Path) -> bool:
     sensitive_files = _TRUST_SENSITIVE_FILES + DEFAULT_PROJECT_INSTRUCTION_PATHS
     if any((root / relative).is_file() for relative in sensitive_files):
         return True
-    skills = root / ".vela" / "skills"
+    skills = vela_dir(root) / "skills"
     return skills.is_dir() and any(skills.glob("*/SKILL.md"))
 
 

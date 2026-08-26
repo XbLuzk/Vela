@@ -8,9 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-
-def _home() -> Path:
-    return Path.home()
+from vela.storage import user_state_path, vela_dir
 
 
 @dataclass(slots=True)
@@ -107,13 +105,13 @@ def load_config(
     env_map = env if env is not None else os.environ
     data = _config_to_dict(VelaConfig())
 
-    user_config = _read_json(_home() / ".vela" / "config.json")
+    user_config = _read_json(user_state_path("config.json"))
     if user_config:
         data = _deep_merge(data, user_config)
 
     root = Path(project_root).resolve() if project_root else None
     if root and include_project:
-        project_config = _read_json(root / ".vela" / "config.json")
+        project_config = _read_json(vela_dir(root) / "config.json")
         if project_config:
             data = _deep_merge(data, project_config)
         project_env = _read_env(root / ".env")
@@ -137,9 +135,9 @@ def get_config_paths(
     *,
     include_project: bool = True,
 ) -> list[Path]:
-    paths = [_home() / ".vela" / "config.json"]
+    paths = [user_state_path("config.json")]
     if project_root and include_project:
-        paths.append(Path(project_root).resolve() / ".vela" / "config.json")
+        paths.append(vela_dir(Path(project_root).resolve()) / "config.json")
     return paths
 
 

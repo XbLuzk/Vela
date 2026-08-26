@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from vela.config import VelaConfig
 from vela.memory.models import MemoryEntry
 from vela.memory.ranking import normalize_text, parse_timestamp, relevance_score
 
@@ -397,6 +398,16 @@ class MemoryManager:
         conn.row_factory = sqlite3.Row
         conn.execute("pragma busy_timeout = 30000")
         return conn
+
+
+def memory_manager_for(config: VelaConfig, cwd: str | Path) -> MemoryManager:
+    """Build the long-term memory manager described by ``config`` for one project."""
+    return MemoryManager(
+        config.memory.long_term_db_path,
+        scope=str(cwd),
+        max_entries=config.memory.max_long_term_entries,
+        max_content_length=config.memory.max_memory_chars,
+    )
 
 
 def _entry_from_row(row: sqlite3.Row) -> MemoryEntry:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import time
@@ -8,6 +7,13 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+
+from vela.storage import (
+    PRIVATE_FILE_MODE,
+    ensure_private_dir,
+    set_private_mode,
+    user_state_path,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,18 +46,17 @@ def grab_clipboard_image(
     if current_platform != "darwin":
         return ClipboardImageResult.failure("当前仅支持在 macOS 读取剪贴板图片")
 
-    target_dir = Path(cache_dir or Path.home() / ".vela" / "cache").expanduser()
+    target_dir = Path(cache_dir or user_state_path("cache")).expanduser()
     png_path: Path | None = None
     tiff_path: Path | None = None
     keep_png = False
     try:
-        target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(target_dir, 0o700)
+        ensure_private_dir(target_dir)
         stamp = time.time_ns()
         png_path = target_dir / f"clip-{stamp}.png"
         png_result = _run_osascript(_MAC_CLIPBOARD_PNG_SCRIPT, png_path, runner)
         if _is_nonempty_file(png_path) and png_result.returncode == 0:
-            os.chmod(png_path, 0o600)
+            set_private_mode(png_path, PRIVATE_FILE_MODE)
             keep_png = True
             return ClipboardImageResult.success(png_path)
         png_path.unlink(missing_ok=True)
@@ -76,7 +81,7 @@ def grab_clipboard_image(
                 check=False,
             )
             if conversion.returncode == 0 and _is_nonempty_file(png_path):
-                os.chmod(png_path, 0o600)
+                set_private_mode(png_path, PRIVATE_FILE_MODE)
                 keep_png = True
                 return ClipboardImageResult.success(png_path)
         detail = (

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from vela.storage import user_state_path, vela_dir
+
 
 @dataclass(slots=True)
 class McpServerSpec:
@@ -29,9 +31,9 @@ def load_mcp_server_specs(
 ) -> dict[str, McpServerSpec]:
     root = Path(project_root).resolve()
     merged: dict[str, Any] = {}
-    paths = [Path.home() / ".vela" / "mcp.json"]
+    paths = [user_state_path("mcp.json")]
     if include_project:
-        paths.append(root / ".vela" / "mcp.json")
+        paths.append(vela_dir(root) / "mcp.json")
     for path in paths:
         data = _read_json(path)
         if not data:
@@ -55,7 +57,7 @@ def write_chrome_devtools_config(
     no_usage_statistics: bool = True,
 ) -> Path:
     root = Path(scope_root).resolve() if scope_root else Path.home()
-    config_dir = root / ".vela"
+    config_dir = vela_dir(root)
     config_dir.mkdir(parents=True, exist_ok=True)
     path = config_dir / "mcp.json"
     data = _read_json(path) or {"mcpServers": {}}
