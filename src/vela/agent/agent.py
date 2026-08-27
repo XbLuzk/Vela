@@ -1,4 +1,4 @@
-"""The stateful Agent used by both the CLI and interactive REPL."""
+"""The stateful Agent used by the local Web runtime."""
 
 from __future__ import annotations
 
@@ -21,12 +21,12 @@ AgentMode = Literal["react", "plan"]
 
 
 class Agent:
-    """A terminal AI agent that connects an LLM to tools for task execution.
+    """An AI agent that connects an LLM to tools for task execution.
 
     The Agent owns the conversation history, manages context compression, and
     delegates the actual LLM-tool interaction loop to mode-specific runners.
     All ``run()`` methods yield the same streaming event protocol so that UI
-    layers (REPL, CLI, or programmatic) can render progress uniformly.
+        layers (Web or programmatic) can render progress uniformly.
 
     Typical usage::
 

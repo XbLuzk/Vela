@@ -58,7 +58,7 @@ class ActiveSession:
         try:
             session_store = store or SessionStore()
             record = session_store.resolve(cwd) if resume else None
-        except Exception as exc:  # noqa: BLE001 - persistence must not disable the REPL
+        except Exception as exc:  # noqa: BLE001 - persistence must not disable the app
             return cls(
                 None,
                 _ephemeral_record(cwd),
@@ -68,7 +68,7 @@ class ActiveSession:
             return cls(session_store, record, resumed=True)
         try:
             return cls(session_store, session_store.create(cwd), resumed=False)
-        except Exception as exc:  # noqa: BLE001 - persistence must not disable the REPL
+        except Exception as exc:  # noqa: BLE001 - persistence must not disable the app
             return cls(
                 None,
                 _ephemeral_record(cwd),
@@ -93,9 +93,24 @@ class ActiveSession:
             return [self.current]
         try:
             return self.store.list(self.current.cwd, limit=limit)
-        except Exception as exc:  # noqa: BLE001 - keep interactive commands usable
+        except Exception as exc:  # noqa: BLE001 - keep the Web app usable
             self.warning = f"Could not list sessions: {exc}"
             return [self.current]
+
+    def new(self) -> SessionRecord:
+        """Start a new persisted conversation in the current workspace."""
+        if self.store is None:
+            self.current = _ephemeral_record(self.current.cwd)
+            self.resumed = False
+            return self.current
+        previous_id = self.current.id
+        self.current = self.store.create(self.current.cwd)
+        self.resumed = False
+        try:
+            self.store.delete_empty(previous_id)
+        except Exception as exc:  # noqa: BLE001 - the new session is already usable
+            self.warning = f"Started a new session, but could not remove empty residue: {exc}"
+        return self.current
 
     def switch(self, reference: str | None = None) -> SessionRecord | None:
         if self.store is None:
@@ -110,7 +125,7 @@ class ActiveSession:
             )
         except ValueError:
             raise
-        except Exception as exc:  # noqa: BLE001 - keep interactive commands usable
+        except Exception as exc:  # noqa: BLE001 - keep the Web app usable
             self.warning = f"Could not resume session: {exc}"
             return None
         if record is None:

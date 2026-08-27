@@ -1,3 +1,3 @@
-from vela.entrypoints.cli import app
+from vela.entrypoints.web import app
 
 app()

@@ -93,7 +93,7 @@ def grab_clipboard_image(
         return ClipboardImageResult.failure(detail or "剪贴板里没有图片，请先截图后再按 Ctrl+V")
     except subprocess.TimeoutExpired:
         return ClipboardImageResult.failure("读取剪贴板图片超时")
-    except Exception as exc:  # noqa: BLE001 - terminal paste must fail without breaking input
+    except Exception as exc:  # noqa: BLE001 - clipboard failure must not break input
         return ClipboardImageResult.failure(f"读取剪贴板图片失败: {exc}")
     finally:
         if tiff_path is not None:

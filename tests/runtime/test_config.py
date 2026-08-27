@@ -23,12 +23,10 @@ def test_config_precedence(tmp_path, monkeypatch):
     monkeypatch.setenv("VELA_PROVIDER", "process")
     monkeypatch.setenv("VELA_MODEL", "process-model")
 
-    config = load_config(
-        overrides={"llm": {"model": "cli-model"}},
-    )
+    config = load_config()
 
     assert config.llm.provider == "process"
-    assert config.llm.model == "cli-model"
+    assert config.llm.model == "process-model"
 
 
 def test_provider_specific_api_key(tmp_path, monkeypatch):

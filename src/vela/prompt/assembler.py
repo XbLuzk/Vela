@@ -28,7 +28,7 @@ class PromptAssembler:
 
     def build_static(self) -> str:
         parts = [
-            f"You are {PRODUCT_NAME}, a powerful AI coding assistant running in a terminal.",
+            f"You are {PRODUCT_NAME}, a powerful local AI coding assistant.",
             f"Default agent mode: {self.config.prompt.agent_mode}",
             "",
             "Core guidelines:",

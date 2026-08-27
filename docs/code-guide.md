@@ -1,86 +1,73 @@
 # Vela 代码阅读路线
 
-这份路线面向刚开始阅读 Python 项目的开发者。不要从最大的文件逐行啃，先只跟一条普通 ReAct
-请求，再分别补 Plan 和持久化。
+这份路线面向第一次阅读 Python Agent + React 项目的开发者。不要从最大的文件逐行看，先跟一条
+普通 ReAct 请求，再分别补 Plan、持久化和 Web 展示。
 
-## 1. 先看最短主链路
+## 1. 最短主链路
 
-一次普通请求只需要跟下面五步：
+一次普通请求只经过六步：
 
-1. `src/vela/entrypoints/cli.py::main`：解析命令行参数，选择交互模式或单次任务。
-2. `src/vela/entrypoints/repl.py::start_repl`：组装模型、工具、Agent 和 Session。
-3. `src/vela/entrypoints/repl.py::_repl_loop`：读取输入；具体命令和任务执行分别交给
-   `repl_commands.py`、`repl_tasks.py`。
-4. `src/vela/agent/agent.py::Agent.run`：根据 `react / plan` 选择执行方式。
-5. `src/vela/agent/react_runtime.py::run_react_agent`：执行“模型回复 → 工具调用 → 工具结果 → 再次回复”。
+1. `web/src/App.tsx` 调用 `api.send()`。
+2. `src/vela/web/app.py::send_message` 校验 HTTP 请求。
+3. `src/vela/web/runtime.py::WebRuntime.send` 启动唯一前台任务。
+4. `src/vela/agent/agent.py::Agent.run` 根据 `react / plan` 选择执行器。
+5. `src/vela/agent/react_runtime.py::run_react_agent` 执行“模型 → 工具 → 模型”。
+6. `WebRuntime` 将 Agent event 发送到 SSE，`web/src/state.ts` 把事件归并为页面状态。
 
-先忽略界面样式、MCP、Memory 和恢复逻辑。能解释这六步，就已经理解了项目最核心的运行链路。
+先忽略样式、MCP、Memory 和恢复逻辑。能解释这六步，就已经理解项目核心。
 
-## 2. ReAct 循环怎么读
+## 2. ReAct 循环
 
-`run_react_agent()` 只保留轮次循环，可以按五段理解：
+`run_react_agent()` 可以按五段阅读：
 
-1. 把历史消息、本次请求、Skill 和系统提示词组装成模型输入。
-2. `_stream_react_turn()` 执行一轮；`agent/model_turn.py::stream_model_turn` 把 Provider 的
-   `LlmEvent` 拼成完整回复和工具调用。
+1. 把历史消息、本次请求、Skill 和系统提示组装为模型输入。
+2. `_stream_react_turn()` 执行一轮模型流式输出。
 3. 没有工具调用就结束；有工具调用就进入 `_execute_tool_round()`。
-4. `ToolExecutor` 负责并发只读工具、串行写工具和 HITL；Plan 恢复所需的写工具 Journal 由
-   Plan 侧通过 `ToolContext` 提供。
-5. 工具结果写回消息历史，下一轮模型调用继续处理。
+4. `ToolExecutor` 并发执行只读工具、串行执行写工具，并在需要时等待 Web 审批。
+5. 工具结果写回消息历史，下一轮继续。
 
-`InteractiveTaskController` 统一编排任务生命周期、工具审批、Plan 确认和取消。一个终端同一时间只
-运行一个 Agent 请求；任务运行期间可编辑下一条消息草稿，但 Enter 会保持锁定，任务结束后才可提交，
-因此不会创建隐式队列或并发 Agent。
+`src/vela/events.py` 集中声明事件字段；阅读事件时先看 `type`。工具声明位于
+`src/vela/tools/builtins.py`，真正的文件、搜索和 Shell 操作位于相邻实现模块。
 
-这条普通 ReAct 链路不依赖高层 Agent 框架，因此可以直接看到循环条件、消息变化和异常出口。
+## 3. Plan 分支
 
-`src/vela/events.py` 用 `AgentEvent` 和 `LlmEvent` 两个 TypedDict 集中声明事件名称和字段；
-阅读事件流时先看 `type`，再查看该事件使用的可选字段。
+普通 ReAct 看懂后再进入 `src/vela/agent/plan_graph.py::LangGraphPlanAgent.run`：
 
-工具本身分两层：
+- Planner 生成 DAG。
+- LangGraph 保存状态、等待人工确认，并派发当前可执行节点。
+- 每个节点仍复用 `run_react_agent()`，不是第二套模型或工具循环。
+- Checkpoint 与 Tool Journal 只服务 Plan 恢复，不进入普通 ReAct API。
 
-- `src/vela/tools/builtins.py` 只声明工具名称、参数和处理函数。
-- `src/vela/tools/file_ops.py` 等模块实现真正的文件或命令操作。
+工具恢复入口是 `src/vela/tools/executor.py::ToolExecutor._execute_single`。依次阅读
+`_prepare_mutation()`、`_claim_mutation()` 和 `_run_tool()`，即可区分恢复、占位和真正执行。
 
-## 3. 再看 Plan
+## 4. Web 边界
 
-普通 ReAct 看懂后再进入 Plan 分支：
+- `src/vela/entrypoints/web.py`：只启动本机 Uvicorn 服务并打开浏览器。
+- `src/vela/web/app.py`：薄 HTTP/SSE 路由，不做 Agent 决策。
+- `src/vela/web/runtime.py`：持有 Agent、Session、MCP 与当前任务。
+- `src/vela/task_control.py`：管理 running、planning、approval、cancelled 等状态。
+- `web/src/state.ts`：把流式事件归并成可渲染状态。
+- `web/src/components/`：展示对话、折叠运行细节、输入框、审批与设置。
 
-- Plan：`src/vela/agent/plan_graph.py::LangGraphPlanAgent.run`
-  - Planner 生成 DAG。
-  - `run()` 只串联“准备输入 → 流式执行 → 收尾”三步，恢复确认和 Journal 清理分别由小函数负责。
-  - LangGraph 保存状态、等待人工确认并并行派发可执行节点。
-  - 每个节点仍然复用 `run_react_agent()`，不是另一套模型或工具系统。
+前端没有 Redux、组件库或第二套业务模型。React 只负责展示和用户动作；Python 是状态与安全边界。
 
-工具执行入口是 `src/vela/tools/executor.py::ToolExecutor._execute_single`。按顺序读它调用的
-`_prepare_mutation()`、`_claim_mutation()` 和 `_run_tool()`，就能区分恢复、占位和真正执行三个阶段。
+## 5. 持久化与独立能力
 
-## 4. 最后补持久化和终端 UI
+- `src/vela/config.py::load_config`：默认值 → 用户配置 → 环境变量。
+- `src/vela/session.py`：保存和恢复项目对话。
+- `src/vela/tools/journal.py`：记录 Plan 的有副作用工具，避免恢复时重复执行。
+- `src/vela/context/manager.py::ContextEngine.prepare`：计算预算、裁剪工具结果、压缩旧历史。
+- `src/vela_rag/server.py`：暴露内置 Code RAG MCP Tool；索引位于 `src/vela_rag/index.py`。
+- `src/vela/trust.py`：在加载项目指令、MCP 与 Skill 前处理项目 Trust。
 
-- `src/vela/config.py::load_config`：按“默认值 → 用户配置 → 环境变量 → CLI 参数”构建唯一配置；
-  Provider 元数据集中在 `src/vela/providers.py`，审批模式由一个独立小函数处理。
-- `src/vela/session.py`：保存和恢复对话消息。
-- `src/vela/tools/journal.py`：记录有副作用的工具调用，恢复时避免重复执行已完成操作。
-- `src/vela/task_control.py`：管理 planning、running、cancelled 等前台任务状态。
-- `src/vela/entrypoints/repl_commands.py`：实现 Status、Memory、Skill 等斜杠命令。
-- `src/vela/entrypoints/repl_tasks.py`：运行 ReAct / Plan，并确保取消或失败后仍保存 Session。
-- `src/vela/entrypoints/repl_ui.py`：输入框、快捷键和底部状态栏；它不参与 Agent 决策。
-- `src/vela/render/rich_renderer.py`：把 Agent 事件显示到终端。
-
-## 5. 独立能力怎么读
-
-- `src/vela/context/manager.py::ContextEngine.prepare`：计算输入预算、裁剪工具结果并压缩历史。
-- `src/vela/context/manager.py::ContextEngine.recover_from_overflow`：Provider 拒绝上下文后再缩减一次旧轮次。
-- `src/vela_rag/server.py`：只负责暴露三个 MCP Tool；索引实现位于 `src/vela_rag/index.py`。
-- `src/vela/trust.py`：记录项目 Trust；CLI 在加载项目配置、MCP 和 Skills 前先解析这项决定。
-
-## 6. 推荐阅读节奏
+## 6. 推荐节奏
 
 每次只读 10 到 20 行，并回答三个问题：
 
-1. 这段代码收到了什么数据？
-2. 它修改或返回了什么数据？
+1. 收到了什么数据？
+2. 修改或返回了什么数据？
 3. 下一步调用哪个函数？
 
-遇到 `await` 时，把它理解为“当前协程暂停，事件循环等待异步结果；结果回来后从这里继续”，不要把
-整个项目同时展开。先跑通一条链路，再回头看数据类和异常分支会轻松很多。
+遇到 `await` 时，只理解成“当前协程等结果，事件循环可继续处理其他工作”。先跑通一条链路，再看
+数据类和异常分支，会比同时展开整个项目容易得多。

@@ -8,6 +8,8 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+node_modules/
+*.tsbuildinfo
 eval-results/
 .vela/
 /.playwright-cli

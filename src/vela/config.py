@@ -88,13 +88,12 @@ LLM_ENV_FIELDS: tuple[tuple[str, str, Any], ...] = (
 
 
 def load_config(
-    overrides: dict[str, Any] | None = None,
     env: dict[str, str | None] | None = None,
     *,
     project_trusted: bool = True,
     warnings: list[str] | None = None,
 ) -> VelaConfig:
-    """Build config in one order: defaults, user file, environment, then CLI.
+    """Build config in one order: defaults, user file, then environment.
 
     Unreadable or malformed configuration sources are skipped so a broken file
     cannot make Vela unusable, but every skipped source and every rejected value
@@ -109,18 +108,17 @@ def load_config(
 
     environment = env if env is not None else os.environ
     data = _apply_env(data, environment, warning_sink)
-    if overrides:
-        data = _deep_merge(data, overrides)
+    protected = {
+        config_key
+        for env_key, config_key, _caster in LLM_ENV_FIELDS
+        if environment.get(env_key) not in (None, "")
+    }
     _apply_provider_env(
         data.setdefault("llm", {}),
         environment,
-        protected=set((overrides or {}).get("llm", {})),
+        protected=protected,
     )
     return _build_config(data, project_trusted=project_trusted, warnings=warning_sink)
-
-
-def get_config_paths() -> list[Path]:
-    return [user_state_path("config.json")]
 
 
 def _build_config(

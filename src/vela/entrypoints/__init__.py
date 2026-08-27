@@ -1,1 +1,1 @@
-"""CLI entrypoints."""
+"""Local Web process entrypoint."""

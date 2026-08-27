@@ -42,7 +42,7 @@ class PlanReviewDecision:
 
 
 class TaskCancelledError(asyncio.CancelledError):
-    """A cooperative cancellation that should end the current interactive run."""
+    """A cooperative cancellation that should end the current Agent run."""
 
 
 async def resolve_plan_review(
@@ -63,8 +63,8 @@ async def resolve_plan_review(
     return decision
 
 
-class InteractiveTaskController:
-    """Own one foreground Agent run and its interactive lifecycle."""
+class TaskController:
+    """Own one foreground Agent run and its user-decision lifecycle."""
 
     def __init__(
         self,

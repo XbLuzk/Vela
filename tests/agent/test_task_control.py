@@ -3,15 +3,15 @@ from __future__ import annotations
 import asyncio
 
 from vela.task_control import (
-    InteractiveTaskController,
     PlanReviewAction,
+    TaskController,
     TaskState,
 )
 
 
 def test_controller_tracks_successful_task_lifecycle():
     states: list[TaskState | None] = []
-    controller = InteractiveTaskController(on_change=lambda: states.append(controller.state))
+    controller = TaskController(on_change=lambda: states.append(controller.state))
 
     async def run():
         controller.start(_complete(), initial_state=TaskState.RUNNING, label="demo")
@@ -27,7 +27,7 @@ def test_controller_tracks_successful_task_lifecycle():
 def test_controller_cancels_running_task_and_reaches_cancelled():
     started = asyncio.Event()
     cleaned_up = False
-    controller = InteractiveTaskController()
+    controller = TaskController()
 
     async def work():
         nonlocal cleaned_up
@@ -52,7 +52,7 @@ def test_controller_cancels_running_task_and_reaches_cancelled():
 
 
 def test_controller_collects_plan_modify_feedback_then_executes():
-    controller = InteractiveTaskController()
+    controller = TaskController()
     decisions = []
 
     async def work():
@@ -81,7 +81,7 @@ def test_controller_collects_plan_modify_feedback_then_executes():
 
 def test_controller_records_failed_state_and_notifies_error_callback():
     errors: list[BaseException] = []
-    controller = InteractiveTaskController(on_error=errors.append)
+    controller = TaskController(on_error=errors.append)
 
     async def fail():
         raise RuntimeError("boom")
@@ -98,7 +98,7 @@ def test_controller_records_failed_state_and_notifies_error_callback():
 
 
 def test_controller_plan_cancel_prevents_execution():
-    controller = InteractiveTaskController()
+    controller = TaskController()
     executed = False
 
     async def work():
@@ -123,7 +123,7 @@ def test_controller_plan_cancel_prevents_execution():
 
 
 def test_controller_cancels_task_while_tool_approval_is_pending():
-    controller = InteractiveTaskController()
+    controller = TaskController()
 
     async def work():
         await controller.request_approval({"tool_name": "bash"})
@@ -141,7 +141,7 @@ def test_controller_cancels_task_while_tool_approval_is_pending():
 
 
 def test_controller_collects_async_tool_approval():
-    controller = InteractiveTaskController()
+    controller = TaskController()
     decisions = []
 
     async def work():
@@ -159,7 +159,7 @@ def test_controller_collects_async_tool_approval():
 
 
 def test_controller_queues_parallel_tool_approvals_fifo():
-    controller = InteractiveTaskController()
+    controller = TaskController()
     decisions: list[tuple[str, str]] = []
 
     async def work():
@@ -185,7 +185,7 @@ def test_controller_queues_parallel_tool_approvals_fifo():
 
 
 def test_controller_cancels_all_queued_tool_approvals():
-    controller = InteractiveTaskController()
+    controller = TaskController()
 
     async def work():
         await asyncio.gather(

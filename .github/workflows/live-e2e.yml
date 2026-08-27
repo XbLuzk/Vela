@@ -1,4 +1,4 @@
-name: Live E2E
+name: Live Web Runtime
 
 on:
   workflow_dispatch:
@@ -79,7 +79,7 @@ jobs:
         if: inputs.browser
         run: google-chrome --version
 
-      - name: Run live acceptance
+      - name: Run live Web runtime acceptance
         env:
           VELA_API_KEY: ${{ secrets.VELA_LIVE_API_KEY }}
         run: uv run --frozen pytest tests/e2e --run-live -v

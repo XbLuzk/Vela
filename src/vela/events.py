@@ -41,12 +41,12 @@ class _AgentEventBase(TypedDict):
 
 
 class AgentEvent(_AgentEventBase, total=False):
-    """One event emitted by an Agent run and consumed by CLI renderers.
+    """One event emitted by an Agent run and consumed by UI renderers.
 
     ``type`` is always present and acts as the discriminator. The remaining
     fields belong only to the matching event type; keeping them in one compact
     contract makes the streaming protocol easy to discover without adding one
-    class per small terminal event.
+    class per small streaming event.
     """
 
     text: str

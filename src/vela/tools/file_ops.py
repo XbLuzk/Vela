@@ -1,4 +1,4 @@
-"""file_ops.py — Encapsulated file operations for the terminal agent.
+"""file_ops.py — Encapsulated file operations for the local Agent.
 
 Provides pure, reusable functions for reading, writing, editing, listing,
 and searching files. Keeps business logic separate from tool

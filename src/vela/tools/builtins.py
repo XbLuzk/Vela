@@ -370,7 +370,7 @@ async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
         )
     content = skill.body or skill.content
     if len(content) > 5_000:
-        content = content[:5_000] + "\n... [truncated; use /skill show for the full skill]"
+        content = content[:5_000] + "\n... [skill instructions truncated to fit context]"
     context.loaded_skill_names.add(skill.name)
     if context.skill_context_buffer:
         context.skill_context_buffer.push(skill.name, content)

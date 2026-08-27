@@ -1,77 +1,45 @@
-# 测试与 Live 验收
+# 测试与验收
 
-Vela 将测试分成三层，避免 Pull Request 因外部模型额度、网络或浏览器环境波动而随机失败。
+Vela 将验证分成三层，避免外部模型额度和网络波动影响普通 CI。
 
 ## 1. 默认 CI
-
-每次向 `main` Push 或创建 Pull Request 时，都在 Python 3.11、3.13 上执行：
 
 ```bash
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
-uv run --frozen python -m pytest
+uv run --frozen pytest
 uv build
 ```
 
-这一层不读取 API Key，也不访问真实模型。
+这一层不读取 API Key，也不访问真实模型。它覆盖 Agent、LangGraph、Session、Context、MCP/RAG、
+Memory、Skill、安全守卫、Web API 和本地 launcher。
 
-## 2. 确定性集成测试
-
-普通 pytest 已覆盖真实 SQLite、LangGraph Checkpoint、stdio MCP 子进程、工具取消、Plan 写工具
-Journal、Plan 恢复、Session 持久化、Context Engine 和 Code RAG MCP。Code RAG 测试会启动真实
-stdio MCP 子进程。项目 Trust、运行中消息拒绝、上下文溢出恢复、审批模式和安全守卫也使用受控
-边界测试，保证错误和恢复场景可以稳定复现。
-
-## 3. Live E2E
-
-Live 测试通过真实 OpenAI-compatible 模型运行完整 CLI，并验证 MCP；Chrome 和 Plan 可按需启用。
-它们默认跳过，只能显式执行：
+## 2. 前端
 
 ```bash
-export VELA_API_KEY=your_key
-export VELA_PROVIDER=deepseek
-export VELA_MODEL=deepseek-v4-flash
-
-uv run pytest tests/e2e --run-live -v
+cd web
+npm ci
+npm test
+npm run build
 ```
 
-可选能力：
+`npm run build` 同时执行 TypeScript 检查，并将生产资源写入 `src/vela/web/static/`。CI 会重新构建并
+检查仓库中的静态资源没有漂移。
+
+## 3. 本地 Web 验收
 
 ```bash
-# 运行 Chrome DevTools MCP 验收，需要 Node.js、npx 和 Chrome
-export VELA_LIVE_BROWSER=true
-
-# 运行真实 Planner 和 Plan DAG，会产生更多模型调用
-export VELA_LIVE_PLAN=true
-
-uv run pytest tests/e2e --run-live -v
+uv run vela --no-open
 ```
 
-| 场景 | 默认 CI | Live E2E |
-| --- | --- | --- |
-| ReAct 与真实模型 | 不运行 | 自动 |
-| 真实模型调用 stdio MCP | 不运行 | 自动 |
-| Chrome DevTools MCP 浏览器 | 不运行 | `VELA_LIVE_BROWSER=true` |
-| 真实 Planner 与 Plan 执行 | 不运行 | `VELA_LIVE_PLAN=true` |
-| 工具取消、Checkpoint、Plan 恢复 | 确定性集成测试 | 当前人工验收 |
+浏览器打开 `http://127.0.0.1:3080`，至少确认：
 
-### GitHub 手动运行
+1. 输入框固定在底部，状态栏在输入框下方。
+2. 发送普通 ReAct 消息后，用户历史和模型输出样式不同。
+3. Thinking 和工具详情默认折叠。
+4. 任务运行时可以编辑草稿但不能重复发送，并可点击停止。
+5. 危险工具审批与 Plan execute/modify/cancel 可以在页面完成。
+6. 刷新页面和切换 Session 后历史仍然存在。
 
-1. 在仓库 Settings → Secrets and variables → Actions 中配置 `VELA_LIVE_API_KEY`。
-2. 打开 Actions → Live E2E → Run workflow。
-3. 选择 Provider、Model，并决定是否启用 Browser 和 Plan。
-
-Live Workflow 只接受手动触发，不在 Pull Request 中读取 Secret。
-
-### 取消与 Plan 恢复人工验收
-
-这两项依赖真实终端按键时机和模型是否按预期调用慢工具，暂不放入普通 CI：
-
-1. 启动 `uv run vela`，要求 Agent 执行一个持续时间较长的工具任务。
-2. 工具运行期间按一次 `Ctrl+C`，确认只取消当前任务且 Session 已保存。
-3. 再次启动 `uv run vela --resume`，确认历史完整。
-4. 使用 `/plan` 启动包含写工具的任务，执行中取消。
-5. 恢复 Session 后运行 `/plan --resume`，确认已完成工具被重放，不确定调用要求再次确认。
-
-后续会用 PTY 驱动替代这部分人工步骤；在此之前，报告结果时必须区分“确定性测试通过”和
-“真实终端人工验收通过”。
+真实模型或 MCP 验收需要个人环境变量或用户配置；不要把凭据写入仓库。报告测试结果时应区分
+“确定性测试通过”“生产构建通过”和“真实模型人工验收通过”。

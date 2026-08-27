@@ -234,6 +234,20 @@ def test_active_session_switches_to_previous_and_discards_empty_current(tmp_path
     assert store.get(empty_id) is None
 
 
+def test_active_session_starts_new_conversation_and_discards_empty_current(tmp_path):
+    store = SessionStore(tmp_path / "sessions.db")
+    project = tmp_path / "project"
+    active = ActiveSession.open(project, store=store)
+    empty_id = active.current.id
+
+    created = active.new()
+
+    assert created.id != empty_id
+    assert created.message_count == 0
+    assert active.resumed is False
+    assert store.get(empty_id) is None
+
+
 def test_active_session_keeps_running_in_memory_when_save_fails(tmp_path, monkeypatch):
     store = SessionStore(tmp_path / "sessions.db")
     active = ActiveSession.open(tmp_path / "project", store=store)

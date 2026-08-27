@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import secrets
-import subprocess
 import sys
 import threading
 from collections.abc import Iterator
@@ -11,16 +11,19 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
 from vela.config import load_config
+from vela.task_control import TaskState
+from vela.web.runtime import RuntimeManager
 
 pytestmark = pytest.mark.live
 
 
-def test_real_model_react_cli(tmp_path: Path) -> None:
-    result = _run_cli(
+def test_real_model_react_web_runtime(tmp_path: Path) -> None:
+    result = _run_web(
         tmp_path,
         "只回复 VELA_LIVE_OK，不要添加其他内容，也不要调用工具。",
     )
@@ -73,7 +76,7 @@ if __name__ == "__main__":
         },
     )
 
-    result = _run_cli(
+    result = _run_web(
         tmp_path,
         f"必须调用 mcp__live__echo，参数 text 必须是 {request_text}；然后只回复工具返回值。",
         extra_env={
@@ -110,7 +113,7 @@ def test_real_model_uses_browser_mcp(tmp_path: Path) -> None:
 
     marker = f"browser-{secrets.token_hex(16)}"
     with _local_marker_page(marker) as (url, requested):
-        result = _run_cli(
+        result = _run_web(
             tmp_path,
             f"必须使用 Chrome DevTools MCP 打开 {url}；读取页面中的随机标记，然后只回复该标记。",
             timeout=360,
@@ -126,7 +129,7 @@ def test_real_model_executes_plan(tmp_path: Path) -> None:
     marker = f"plan-{secrets.token_hex(16)}"
     (tmp_path / "LIVE_PLAN_MARKER.txt").write_text(marker + "\n", encoding="utf-8")
 
-    result = _run_cli(
+    result = _run_web(
         tmp_path,
         "制定并执行一个计划：读取 LIVE_PLAN_MARKER.txt，最终答案必须包含文件中的标记。",
         mode="plan",
@@ -137,7 +140,7 @@ def test_real_model_executes_plan(tmp_path: Path) -> None:
     assert marker in result["text"]
 
 
-def _run_cli(
+def _run_web(
     workspace: Path,
     prompt: str,
     *,
@@ -151,48 +154,48 @@ def _run_cli(
 
     home = workspace / "home"
     home.mkdir(exist_ok=True)
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": str(home),
-            "NO_COLOR": "1",
-            "VELA_API_KEY": config.llm.api_key,
-            "VELA_PROVIDER": config.llm.provider,
-            "VELA_MODEL": config.llm.model,
-            "VELA_APPROVAL_MODE": "auto",
-        }
-    )
+    env = {
+        "HOME": str(home),
+        "VELA_API_KEY": config.llm.api_key,
+        "VELA_PROVIDER": config.llm.provider,
+        "VELA_MODEL": config.llm.model,
+        "VELA_APPROVAL_MODE": "auto",
+    }
     if config.llm.base_url:
         env["VELA_BASE_URL"] = config.llm.base_url
     if config.llm.context_window:
         env["VELA_CONTEXT_WINDOW"] = str(config.llm.context_window)
     env.update(extra_env or {})
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "vela",
-            "--cwd",
-            str(workspace),
-            "--trust-project",
-            "--mode",
-            mode,
-            "--json",
-            "--prompt",
-            prompt,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=timeout,
-    )
-    if completed.returncode != 0:
-        pytest.fail(f"live CLI failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}")
-    try:
-        return json.loads(completed.stdout.strip().splitlines()[-1])
-    except (IndexError, json.JSONDecodeError) as exc:
-        raise AssertionError(f"live CLI did not return JSON: {completed.stdout}") from exc
+
+    async def scenario() -> dict[str, Any]:
+        manager = RuntimeManager(workspace)
+        manager.project_trusted = True
+        try:
+            await manager.rebuild()
+            runtime = manager.runtime
+            assert runtime is not None, manager.error
+            await runtime.send(prompt, mode)
+            state = await asyncio.wait_for(_complete_run(runtime), timeout=timeout)
+            assert state == TaskState.COMPLETED, runtime.controller.error
+            assistant_text = "\n".join(
+                str(message.content)
+                for message in runtime.agent.history
+                if message.role == "assistant" and isinstance(message.content, str)
+            )
+            return {"text": assistant_text, "mode": runtime.agent.mode}
+        finally:
+            await manager.close()
+
+    with patch.dict(os.environ, env, clear=False):
+        return asyncio.run(scenario())
+
+
+async def _complete_run(runtime) -> TaskState | None:
+    while runtime.controller.active:
+        if runtime.controller.awaiting_plan_review:
+            runtime.submit_plan_review("execute")
+        await asyncio.sleep(0.05)
+    return await runtime.controller.wait()
 
 
 def _write_mcp_config(workspace: Path, servers: dict[str, Any]) -> None:
