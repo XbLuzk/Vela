@@ -292,7 +292,8 @@ button:disabled {
   padding: 14px 28px 0;
 }
 
-.setup-banner {
+.setup-banner,
+.extension-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -302,15 +303,28 @@ button:disabled {
   background: var(--accent-soft);
 }
 
-.setup-banner strong {
+.setup-banner strong,
+.extension-banner strong {
   font-size: 13px;
 }
 
 .setup-banner p,
+.extension-banner p,
 .warning-strip p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.extension-banner {
+  border-left-color: var(--line-strong);
+  background: var(--code);
+}
+
+.banner-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
 }
 
 .warning-strip {
@@ -1052,6 +1066,15 @@ button:disabled {
 
   .interaction-actions {
     justify-content: flex-end;
+  }
+
+  .extension-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .banner-actions {
+    align-self: flex-end;
   }
 
   .field-row {

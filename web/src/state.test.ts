@@ -7,7 +7,7 @@ const bootstrap: Bootstrap = {
   version: "0.5.0",
   ready: true,
   cwd: "/workspace",
-  trust_required: false,
+  project_extensions_pending: false,
   project_trusted: true,
   config: {
     llm: {

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
 from vela.plan.models import ExecutionPlan, Task, TaskType
-from vela.web.runtime import EventHub, serialize_agent_event
+from vela.web import runtime as runtime_module
+from vela.web.runtime import EventHub, RuntimeManager, serialize_agent_event
 
 
 def test_serialize_agent_event_converts_errors_and_plan_dataclasses():
@@ -36,3 +38,17 @@ def test_event_hub_fans_out_to_connected_streams():
         await stream.aclose()
 
     asyncio.run(scenario())
+
+
+def test_pending_project_trust_starts_with_builtin_capabilities(monkeypatch, tmp_path):
+    manager = RuntimeManager(tmp_path)
+    rebuild = AsyncMock()
+    monkeypatch.setattr(runtime_module, "has_trust_sensitive_resources", lambda _cwd: True)
+    monkeypatch.setattr(manager.trust_store, "get", lambda _cwd: None)
+    monkeypatch.setattr(manager, "rebuild", rebuild)
+
+    asyncio.run(manager.initialize())
+
+    assert manager.project_extensions_pending is True
+    assert manager.project_trusted is False
+    rebuild.assert_awaited_once_with()

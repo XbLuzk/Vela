@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from vela.providers import provider_api_key_envs
-from vela.storage import user_state_path
+from vela.storage import user_state_path, write_private_text
 
 
 @dataclass(slots=True)
@@ -85,6 +85,7 @@ LLM_ENV_FIELDS: tuple[tuple[str, str, Any], ...] = (
     ("VELA_MAX_TOKENS", "max_tokens", int),
     ("VELA_TEMPERATURE", "temperature", float),
 )
+USER_LLM_FIELDS = tuple(dict.fromkeys(config_key for _, config_key, _ in LLM_ENV_FIELDS))
 
 
 def load_config(
@@ -140,6 +141,29 @@ def config_to_public_dict(config: VelaConfig) -> dict[str, Any]:
     if data.get("llm", {}).get("api_key"):
         data["llm"]["api_key"] = "***"
     return data
+
+
+def update_user_config(values: dict[str, Any]) -> None:
+    """Merge settings from the Web form into the user-level config file."""
+    path = user_state_path("config.json")
+    current = _read_json(path, []) or {}
+
+    llm_values = {
+        key: values[key]
+        for key in USER_LLM_FIELDS
+        if key in values and values[key] is not None and (key != "api_key" or values[key])
+    }
+    _update_section(current, "llm", llm_values)
+
+    agent_mode = values.get("agent_mode")
+    if agent_mode in {"react", "plan"}:
+        _update_section(current, "prompt", {"agent_mode": agent_mode})
+
+    approval_mode = values.get("approval_mode")
+    if approval_mode in {"ask", "auto"}:
+        _update_section(current, "policy", {"approval_mode": approval_mode})
+
+    write_private_text(path, json.dumps(current, ensure_ascii=False, indent=2) + "\n")
 
 
 def _read_json(path: Path, warnings: list[str]) -> dict[str, Any] | None:
@@ -232,6 +256,16 @@ def _deep_merge(target: dict[str, Any], source: dict[str, Any]) -> dict[str, Any
         else:
             result[key] = deepcopy(value)
     return result
+
+
+def _update_section(config: dict[str, Any], name: str, values: dict[str, Any]) -> None:
+    if not values:
+        return
+    section = config.get(name)
+    if not isinstance(section, dict):
+        section = {}
+        config[name] = section
+    section.update(values)
 
 
 def _config_to_dict(config: VelaConfig) -> dict[str, Any]:

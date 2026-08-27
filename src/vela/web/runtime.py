@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -13,14 +12,13 @@ from typing import Any
 from vela import __version__
 from vela.agent import Agent
 from vela.bootstrap import build_tool_registry
-from vela.config import VelaConfig, config_to_public_dict, load_config
+from vela.config import VelaConfig, config_to_public_dict, load_config, update_user_config
 from vela.events import AgentEvent
 from vela.llm import create_llm_client
 from vela.llm.model_profiles import DEFAULT_MODEL_PROFILES
 from vela.mcp import McpClientManager
 from vela.session import ActiveSession, SessionRecord
 from vela.session_history import finalize_interrupted_history
-from vela.storage import user_state_path, write_private_text
 from vela.task_control import TaskController, TaskState
 from vela.trust import ProjectTrustStore, has_trust_sensitive_resources
 
@@ -60,7 +58,6 @@ class WebRuntime:
         mcp_manager: McpClientManager,
         active_session: ActiveSession,
         events: EventHub,
-        warnings: list[str],
     ) -> None:
         self.cwd = cwd
         self.config = config
@@ -68,7 +65,6 @@ class WebRuntime:
         self.mcp_manager = mcp_manager
         self.active_session = active_session
         self.events = events
-        self.warnings = warnings
         self.current_run_id: str | None = None
         self.controller = TaskController(on_change=self._schedule_state_event)
         self.agent.approval_callback = self._request_approval
@@ -108,22 +104,14 @@ class WebRuntime:
             mcp_manager=mcp_manager,
             active_session=active_session,
             events=events,
-            warnings=warnings,
         )
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "ready": True,
-            "cwd": str(self.cwd),
-            "model": self.agent.llm_client.model_name,
-            "provider": self.agent.llm_client.provider_name,
-            "context_window": self.agent.llm_client.max_context_window,
-            "mode": self.agent.mode,
             "task": self.task_snapshot(),
             "session": _session_payload(self.active_session.current, include_messages=True),
             "sessions": self.list_sessions(),
             "tool_count": len(self.agent.tool_registry.list_names()),
-            "warnings": [*self.warnings, *_session_warnings(self.active_session)],
         }
 
     def task_snapshot(self) -> dict[str, Any]:
@@ -287,16 +275,15 @@ class RuntimeManager:
         self.config_warnings: list[str] = []
         self.error: str | None = None
         self.trust_store = ProjectTrustStore()
-        self.trust_required = False
+        self.project_extensions_pending = False
         self.project_trusted = False
 
     async def initialize(self) -> None:
         sensitive = has_trust_sensitive_resources(self.cwd)
         saved = self.trust_store.get(self.cwd)
-        self.trust_required = sensitive and saved is None
+        self.project_extensions_pending = sensitive and saved is None
         self.project_trusted = True if not sensitive else bool(saved)
-        if not self.trust_required:
-            await self.rebuild()
+        await self.rebuild()
 
     async def rebuild(self) -> None:
         if self.runtime is not None:
@@ -322,16 +309,19 @@ class RuntimeManager:
 
     def snapshot(self) -> dict[str, Any]:
         config = self.config or load_config(project_trusted=self.project_trusted)
+        warnings = list(self.config_warnings)
+        if self.runtime is not None:
+            warnings.extend(_session_warnings(self.runtime.active_session))
         base = {
             "version": __version__,
             "ready": self.runtime is not None,
             "error": self.error,
             "cwd": str(self.cwd),
-            "trust_required": self.trust_required,
+            "project_extensions_pending": self.project_extensions_pending,
             "project_trusted": self.project_trusted,
             "config": config_to_public_dict(config),
             "model_profiles": [asdict(profile) for profile in DEFAULT_MODEL_PROFILES],
-            "warnings": list(self.config_warnings),
+            "warnings": warnings,
         }
         if self.runtime is not None:
             base.update(self.runtime.snapshot())
@@ -342,51 +332,13 @@ class RuntimeManager:
             raise RuntimeError("Cancel the running task before changing project trust")
         self.trust_store.set(self.cwd, trusted)
         self.project_trusted = trusted
-        self.trust_required = False
+        self.project_extensions_pending = False
         await self.rebuild()
 
     async def update_settings(self, values: dict[str, Any]) -> None:
         if self.runtime is not None and self.runtime.controller.active:
             raise RuntimeError("Cancel the running task before changing settings")
-        current_path = user_state_path("config.json")
-        try:
-            current = json.loads(current_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            current = {}
-        if not isinstance(current, dict):
-            current = {}
-        llm = current.setdefault("llm", {})
-        if not isinstance(llm, dict):
-            llm = {}
-            current["llm"] = llm
-        for key in (
-            "provider",
-            "model",
-            "base_url",
-            "context_window",
-            "max_tokens",
-            "temperature",
-        ):
-            if key in values and values[key] is not None:
-                llm[key] = values[key]
-        if values.get("api_key"):
-            llm["api_key"] = str(values["api_key"])
-        prompt = current.setdefault("prompt", {})
-        if not isinstance(prompt, dict):
-            prompt = {}
-            current["prompt"] = prompt
-        if values.get("agent_mode") in {"react", "plan"}:
-            prompt["agent_mode"] = values["agent_mode"]
-        policy = current.setdefault("policy", {})
-        if not isinstance(policy, dict):
-            policy = {}
-            current["policy"] = policy
-        if values.get("approval_mode") in {"ask", "auto"}:
-            policy["approval_mode"] = values["approval_mode"]
-        write_private_text(
-            current_path,
-            json.dumps(current, ensure_ascii=False, indent=2) + "\n",
-        )
+        update_user_config(values)
         await self.rebuild()
 
     async def close(self) -> None:

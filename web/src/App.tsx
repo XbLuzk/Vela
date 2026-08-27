@@ -14,14 +14,29 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [mode, setMode] = useState<AgentMode>("react");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [trustOpen, setTrustOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
+  async function runRequest<T>(
+    action: Promise<T>,
+    options: { rethrow?: boolean } = {},
+  ): Promise<T | null> {
+    try {
+      return await action;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+      if (options.rethrow) throw error;
+      return null;
+    }
+  }
+
   useEffect(() => {
-    void api.bootstrap().then((bootstrap) => {
+    void runRequest(api.bootstrap()).then((bootstrap) => {
+      if (!bootstrap) return;
       dispatch({ type: "loaded", bootstrap });
       setMode(bootstrap.config.prompt.agent_mode);
-      if (!bootstrap.ready && !bootstrap.trust_required) setSettingsOpen(true);
-    }).catch((error: Error) => setNotice(error.message));
+      if (!bootstrap.ready) setSettingsOpen(true);
+    });
     return connectEvents(
       (event) => dispatch({ type: "event", event }),
       (connected) => dispatch({ type: "connection", connected }),
@@ -39,29 +54,21 @@ export default function App() {
   }
 
   async function refresh(action: Promise<Bootstrap>): Promise<Bootstrap | null> {
-    try {
-      const next = await action;
-      dispatch({ type: "loaded", bootstrap: next });
-      if (!next.ready && !next.trust_required) setSettingsOpen(true);
-      return next;
-    } catch (error) {
-      setNotice((error as Error).message);
-      return null;
-    }
+    const next = await runRequest(action);
+    if (!next) return null;
+    dispatch({ type: "loaded", bootstrap: next });
+    if (!next.ready) setSettingsOpen(true);
+    return next;
   }
 
   async function changeSession(action: Promise<SessionSummary>) {
-    try {
-      const session = await action;
-      dispatch({ type: "event", event: { type: "session_changed", session } });
-    } catch (error) {
-      setNotice((error as Error).message);
-    }
+    const session = await runRequest(action);
+    if (session) dispatch({ type: "event", event: { type: "session_changed", session } });
   }
 
   const task = bootstrap.task;
   const messages = bootstrap.session?.messages ?? [];
-  const disabled = !bootstrap.ready || bootstrap.trust_required;
+  const disabled = !bootstrap.ready;
 
   return (
     <div className="app-shell">
@@ -88,6 +95,27 @@ export default function App() {
         </header>
 
         <div className="notices">
+          {bootstrap.project_extensions_pending ? (
+            <div className="extension-banner">
+              <div>
+                <strong>检测到项目级扩展</strong>
+                <p>当前仍使用内置能力；AGENTS.md、MCP 与 Skills 尚未加载。</p>
+              </div>
+              <div className="banner-actions">
+                <button
+                  type="button"
+                  className="quiet-button"
+                  onClick={() => void refresh(api.trust(false))}
+                >
+                  保持关闭
+                </button>
+                <button type="button" className="primary-button" onClick={() => setTrustOpen(true)}>
+                  查看并启用
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {bootstrap.error ? (
             <div className="setup-banner">
               <div>
@@ -110,12 +138,8 @@ export default function App() {
 
         <InteractionBar
           task={task}
-          onApprove={async (value) => {
-            try { await api.approve(value); } catch (error) { setNotice((error as Error).message); }
-          }}
-          onReview={async (value) => {
-            try { await api.reviewPlan(value); } catch (error) { setNotice((error as Error).message); }
-          }}
+          onApprove={async (value) => { await runRequest(api.approve(value)); }}
+          onReview={async (value) => { await runRequest(api.reviewPlan(value)); }}
         />
 
         <Composer
@@ -124,20 +148,13 @@ export default function App() {
           disabled={disabled}
           onModeChange={setMode}
           onSend={async (message) => {
-            try {
-              await api.send(message, mode);
-            } catch (error) {
-              setNotice((error as Error).message);
-              throw error;
-            }
+            await runRequest(api.send(message, mode), { rethrow: true });
           }}
-          onCancel={async () => {
-            try { await api.cancel(); } catch (error) { setNotice((error as Error).message); }
-          }}
+          onCancel={async () => { await runRequest(api.cancel()); }}
         />
 
         <footer className="statusbar">
-          <span>{bootstrap.provider ?? bootstrap.config.llm.provider} / {bootstrap.model ?? bootstrap.config.llm.model}</span>
+          <span>{bootstrap.config.llm.provider} / {bootstrap.config.llm.model}</span>
           <span>{mode === "plan" ? "LangGraph Plan" : "ReAct"}</span>
           <span>{bootstrap.tool_count ?? 0} tools</span>
           <span className="status-spacer" />
@@ -153,11 +170,12 @@ export default function App() {
         onSave={async (settings) => Boolean((await refresh(api.settings(settings)))?.ready)}
       />
 
-      {bootstrap.trust_required ? (
+      {bootstrap.project_extensions_pending && trustOpen ? (
         <TrustDialog
           cwd={bootstrap.cwd}
-          onDecide={async (trusted) => {
-            await refresh(api.trust(trusted));
+          onCancel={() => setTrustOpen(false)}
+          onConfirm={async () => {
+            if (await refresh(api.trust(true))) setTrustOpen(false);
           }}
         />
       ) : null}

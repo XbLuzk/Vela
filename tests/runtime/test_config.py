@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from vela.config import config_to_public_dict, load_config
+from vela.config import config_to_public_dict, load_config, update_user_config
 
 
 def test_config_precedence(tmp_path, monkeypatch):
@@ -67,3 +67,46 @@ def test_runtime_project_trust_is_not_exposed_as_persisted_config(tmp_path, monk
     config = load_config(project_trusted=False)
 
     assert "project_trusted" not in config_to_public_dict(config)
+
+
+def test_update_user_config_merges_web_settings_without_erasing_other_sections(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    config_path = home / ".vela" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "llm": {"provider": "old", "api_key": "keep-me", "timeout": 42},
+                "tools": {"max_concurrent_read": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    update_user_config(
+        {
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "api_key": "",
+            "base_url": "https://api.example/v1",
+            "agent_mode": "plan",
+            "approval_mode": "auto",
+        }
+    )
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved == {
+        "llm": {
+            "provider": "deepseek",
+            "api_key": "keep-me",
+            "timeout": 42,
+            "model": "deepseek-chat",
+            "base_url": "https://api.example/v1",
+        },
+        "tools": {"max_concurrent_read": 2},
+        "prompt": {"agent_mode": "plan"},
+        "policy": {"approval_mode": "auto"},
+    }

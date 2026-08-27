@@ -60,15 +60,11 @@ export interface Bootstrap {
   ready: boolean;
   error?: string | null;
   cwd: string;
-  trust_required: boolean;
+  project_extensions_pending: boolean;
   project_trusted: boolean;
   config: PublicConfig;
   model_profiles: ModelProfile[];
   warnings: string[];
-  model?: string;
-  provider?: string;
-  context_window?: number;
-  mode?: AgentMode;
   task?: TaskSnapshot;
   session?: SessionSummary;
   sessions?: SessionSummary[];
