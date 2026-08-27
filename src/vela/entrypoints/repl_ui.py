@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal, cast
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.filters import Condition, is_done, to_filter
@@ -34,15 +32,10 @@ REPL_STYLE_RULES = {
     "placeholder": "italic ansibrightblack",
     "input.rule": "ansibrightblack",
     "prompt.dim": "ansibrightblack",
-    "prompt.count.agents": "bold ansiblue",
-    "prompt.count.mcp": "bold ansiblue",
-    "prompt.count.skills": "bold ansiblue",
-    "prompt.tools": "bold ansiblue",
     "toolbar.model": "bold",
     "toolbar.ctx.bar": "ansigreen",
     "toolbar.ctx.value": "",
-    "toolbar.cwd.value": "ansiblue",
-    "toolbar.mode.default": "bold ansigreen",
+    "toolbar.mode.ask": "bold ansigreen",
     "toolbar.mode.auto": "bold ansiyellow",
     "toolbar.task": "bold ansimagenta",
     "toolbar.gap": "",
@@ -50,36 +43,27 @@ REPL_STYLE_RULES = {
     "bottom-toolbar.text": "noreverse",
 }
 
-PermissionMode = Literal["default", "auto"]
+ApprovalMode = Literal["ask", "auto"]
 
 
 @dataclass
-class PermissionModeController:
-    """Switch the live config between guarded and full-access modes."""
+class ApprovalModeController:
+    """Toggle tool approval prompts without changing safety guards."""
 
     config: VelaConfig
-    mode: PermissionMode = "default"
+    mode: ApprovalMode = field(init=False)
 
     def __post_init__(self) -> None:
-        self._default_hitl_mode = self.config.policy.hitl_mode
-        self._default_path_guard_enabled = self.config.policy.path_guard_enabled
-        self._default_command_guard_enabled = self.config.policy.command_guard_enabled
-        self.set(self.mode)
+        configured = self.config.policy.approval_mode
+        self.set(cast(ApprovalMode, configured if configured in {"ask", "auto"} else "ask"))
 
-    def set(self, mode: PermissionMode) -> PermissionMode:
+    def set(self, mode: ApprovalMode) -> ApprovalMode:
         self.mode = mode
-        if mode == "auto":
-            self.config.policy.hitl_mode = "never"
-            self.config.policy.path_guard_enabled = False
-            self.config.policy.command_guard_enabled = False
-        else:
-            self.config.policy.hitl_mode = self._default_hitl_mode
-            self.config.policy.path_guard_enabled = self._default_path_guard_enabled
-            self.config.policy.command_guard_enabled = self._default_command_guard_enabled
+        self.config.policy.approval_mode = mode
         return self.mode
 
-    def toggle(self) -> PermissionMode:
-        return self.set("auto" if self.mode == "default" else "default")
+    def toggle(self) -> ApprovalMode:
+        return self.set("auto" if self.mode == "ask" else "ask")
 
 
 class FixedComposerPromptSession(PromptSession):
@@ -116,7 +100,7 @@ class FixedComposerPromptSession(PromptSession):
 
 
 def permission_key_bindings(
-    permission_mode: PermissionModeController,
+    approval_mode: ApprovalModeController,
     task_controller: InteractiveTaskController | None = None,
     *,
     console: Console | None = None,
@@ -144,8 +128,8 @@ def permission_key_bindings(
         buffer.validate_and_handle()
 
     @bindings.add(Keys.BackTab)
-    def toggle_permission_mode(event) -> None:
-        permission_mode.toggle()
+    def toggle_approval_mode(event) -> None:
+        approval_mode.toggle()
         event.app.invalidate()
 
     @bindings.add(Keys.Escape)
@@ -212,43 +196,26 @@ def prompt_placeholder(task_controller: InteractiveTaskController) -> list[tuple
 
 def prompt_status(
     *,
-    cwd: str,
     model: str,
-    tools: int,
-    agents_files: int,
-    mcp_servers: int,
-    skills: int,
     stats: dict[str, Any] | None = None,
-    permission_mode: PermissionMode = "default",
+    approval_mode: ApprovalMode = "ask",
     task_state: TaskState | None = None,
 ) -> list[tuple[str, str]]:
-    """Build the live status block shown below the editable prompt."""
+    """Build the single compact status line below the editable prompt."""
 
-    return [
-        ("class:prompt.count.agents", str(agents_files)),
-        ("class:prompt.dim", f" {_plural_label(agents_files, 'AGENTS.md file')} · "),
-        ("class:prompt.count.mcp", str(mcp_servers)),
-        ("class:prompt.dim", f" {_plural_label(mcp_servers, 'MCP server')} · "),
-        ("class:prompt.count.skills", str(skills)),
-        ("class:prompt.dim", f" {_plural_label(skills, 'skill')} · Tools "),
-        ("class:prompt.tools", str(tools)),
-        ("class:prompt.dim", "\n"),
-        *bottom_toolbar(
-            cwd,
-            model,
-            stats,
-            permission_mode=permission_mode,
-            task_state=task_state,
-        ),
-    ]
+    return bottom_toolbar(
+        model,
+        stats,
+        approval_mode=approval_mode,
+        task_state=task_state,
+    )
 
 
 def bottom_toolbar(
-    cwd: str,
     model: str,
     stats: dict[str, Any] | None = None,
     *,
-    permission_mode: PermissionMode = "default",
+    approval_mode: ApprovalMode = "ask",
     task_state: TaskState | None = None,
 ) -> list[tuple[str, str]]:
     stats = stats or {}
@@ -262,9 +229,7 @@ def bottom_toolbar(
         ("class:toolbar.gap", " "),
         ("class:toolbar.ctx.value", context_text),
         ("class:toolbar.gap", "  "),
-        ("class:toolbar.cwd.value", _shorten_home(cwd)),
-        ("class:toolbar.gap", "  "),
-        (f"class:toolbar.mode.{permission_mode}", permission_mode_label(permission_mode)),
+        (f"class:toolbar.mode.{approval_mode}", approval_mode_label(approval_mode)),
         ("class:toolbar.gap", "  Shift+Tab"),
     ]
     if task_state is not None:
@@ -289,22 +254,8 @@ def input_border_row() -> VSplit:
     )
 
 
-def permission_mode_label(mode: PermissionMode) -> str:
-    return "Auto (full access)" if mode == "auto" else "Default"
-
-
-def _plural_label(count: int, singular: str) -> str:
-    return singular if count == 1 else singular + "s"
-
-
-def _shorten_home(path: str) -> str:
-    home = str(Path.home())
-    if path == home:
-        return "~"
-    prefix = home + os.sep
-    if path.startswith(prefix):
-        return "~/" + path[len(prefix) :]
-    return path
+def approval_mode_label(mode: ApprovalMode) -> str:
+    return "Auto" if mode == "auto" else "Ask"
 
 
 def _format_toolbar_bar(value: float, *, width: int = 12) -> str:

@@ -12,7 +12,7 @@ from vela.config import load_config
 from vela.entrypoints import repl_commands
 from vela.entrypoints.repl import ReplRuntime
 from vela.entrypoints.repl_commands import handle_slash, handle_trust_command
-from vela.entrypoints.repl_ui import PermissionModeController
+from vela.entrypoints.repl_ui import ApprovalModeController
 from vela.render import RichRenderer
 from vela.session import ActiveSession, SessionStore
 from vela.task_control import InteractiveTaskController
@@ -36,7 +36,7 @@ def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch)
             last_usage=Usage(),
         ),
         registry=ToolRegistry(),
-        permission_mode=PermissionModeController(config),
+        approval_mode=ApprovalModeController(config),
         renderer=RichRenderer(console),
         active_session=active,
         task_controller=InteractiveTaskController(),
@@ -47,11 +47,11 @@ def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch)
         "/memory search remember",
         "/context",
         "/hitl auto",
-        "/config",
-        "/policy",
-        "/usage",
+        "/status config",
+        "/status policy",
+        "/status usage",
         "/skill list",
-        "/mcp",
+        "/status mcp",
     ):
         asyncio.run(handle_slash(command, runtime))
 
@@ -59,9 +59,9 @@ def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch)
     assert "Saved memory" in output
     assert "remember this" in output
     assert "Vela Context" in output
-    assert "Permission mode: Auto" in output
+    assert "Approval mode: Auto" in output
     assert "vela mcp list" in output
-    assert runtime.permission_mode.mode == "auto"
+    assert runtime.approval_mode.mode == "auto"
 
 
 def test_memory_command_reports_legacy_database_without_ending_command_dispatch(
@@ -158,7 +158,7 @@ def _trust_runtime(tmp_path):
                 last_usage=Usage(),
             ),
             registry=ToolRegistry(),
-            permission_mode=PermissionModeController(config),
+            approval_mode=ApprovalModeController(config),
             renderer=RichRenderer(console),
             active_session=ActiveSession.open(
                 project,

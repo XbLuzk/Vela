@@ -10,9 +10,6 @@ import pytest
 from vela.config import load_config
 from vela.llm.openai_compatible import OpenAICompatibleClient
 from vela.mcp.config import load_mcp_server_specs
-from vela.policy.audit_log import AuditLog
-from vela.run_trace.models import RunTrace
-from vela.run_trace.store import RunTraceStore
 from vela.tools.file_ops import grep
 from vela.types import Message
 
@@ -52,7 +49,7 @@ def test_unknown_and_invalid_config_values_are_reported(tmp_path, monkeypatch) -
         warnings=warnings,
     )
 
-    assert config.policy.hitl_mode != "sometimes"
+    assert config.policy.approval_mode != "sometimes"
     joined = " | ".join(warnings)
     assert "unknown llm config keys: nope" in joined
     assert "'policy'" in joined
@@ -65,6 +62,57 @@ def test_config_warnings_are_optional(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
     assert load_config(project_root=tmp_path, env={}).llm.provider
+
+
+def test_legacy_hitl_config_migrates_and_new_environment_value_wins(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    (project / ".vela").mkdir(parents=True)
+    (project / ".vela" / "config.json").write_text(
+        json.dumps({"policy": {"hitl_mode": "never"}}),
+        encoding="utf-8",
+    )
+
+    warnings: list[str] = []
+    config = load_config(
+        project_root=project,
+        env={"VELA_HITL": "never", "VELA_APPROVAL_MODE": "ask"},
+        warnings=warnings,
+    )
+
+    assert config.policy.approval_mode == "ask"
+    assert config.policy.path_guard_enabled is True
+    assert config.policy.command_guard_enabled is True
+    assert any("Migrated policy.hitl_mode" in warning for warning in warnings)
+    assert any("Migrated legacy VELA_HITL" in warning for warning in warnings)
+
+
+def test_removed_context_tuning_keys_are_reported_and_ignored(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    (project / ".vela").mkdir(parents=True)
+    (project / ".vela" / "config.json").write_text(
+        json.dumps(
+            {
+                "memory": {
+                    "max_conversation_history": 42,
+                    "compression_threshold": 0.5,
+                    "summary_max_chars": 1234,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    warnings: list[str] = []
+    config = load_config(project_root=project, env={}, warnings=warnings)
+
+    assert config.memory.max_conversation_history == 42
+    assert not hasattr(config.memory, "compression_threshold")
+    assert any("unknown memory config keys" in warning for warning in warnings)
 
 
 # MCP config ------------------------------------------------------------------
@@ -103,72 +151,6 @@ def test_invalid_mcp_json_is_reported(tmp_path, monkeypatch) -> None:
 
     assert load_mcp_server_specs(project, warnings=warnings) == {}
     assert any("expected a JSON object" in warning for warning in warnings)
-
-
-# Audit log -------------------------------------------------------------------
-
-
-def test_audit_tail_reports_corrupt_entries(tmp_path) -> None:
-    path = tmp_path / "audit.jsonl"
-    path.write_text('{"tool": "read"}\nnot json\n\n', encoding="utf-8")
-    log = AuditLog(path)
-
-    events = log.tail()
-
-    assert events == [{"tool": "read"}]
-    assert log.last_warning == "Skipped 1 corrupt audit log entry"
-
-
-def test_audit_tail_reports_read_failure(tmp_path, monkeypatch) -> None:
-    path = tmp_path / "audit.jsonl"
-    path.write_text("{}\n", encoding="utf-8")
-    log = AuditLog(path)
-
-    def fail_read(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
-        raise OSError("permission denied")
-
-    monkeypatch.setattr(Path, "read_text", fail_read)
-
-    assert log.tail() == []
-    assert "Audit log could not be read" in str(log.last_warning)
-
-
-def test_audit_tail_warning_resets_between_calls(tmp_path) -> None:
-    path = tmp_path / "audit.jsonl"
-    path.write_text("not json\n", encoding="utf-8")
-    log = AuditLog(path)
-    log.tail()
-    path.write_text('{"tool": "read"}\n', encoding="utf-8")
-
-    assert log.tail() == [{"tool": "read"}]
-    assert log.last_warning is None
-
-
-# Run traces ------------------------------------------------------------------
-
-
-def test_run_trace_list_reports_corrupt_records(tmp_path) -> None:
-    store = RunTraceStore(tmp_path / "runs.jsonl")
-    store.append(
-        RunTrace(
-            run_id="run_1",
-            status="completed",
-            mode="react",
-            model="m",
-            provider="p",
-            cwd=".",
-            session_id=None,
-            started_at="2026-01-01T00:00:00Z",
-        )
-    )
-    with store.path.open("ab") as handle:
-        handle.write(b"not json\n")
-        handle.write(b'{"run_id":"run_corrupt","usage":"bad"}\n')
-
-    traces = store.list(limit=10)
-
-    assert [item["run_id"] for item in traces] == ["run_1"]
-    assert store.last_warning == "Skipped 2 corrupt run trace records"
 
 
 # File tools ------------------------------------------------------------------

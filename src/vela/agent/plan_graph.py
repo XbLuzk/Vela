@@ -18,7 +18,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Overwrite, Send, interrupt
 
-from vela.agent.react_runtime import run_react_agent
+from vela.agent.react_runtime import ReactRuntime, run_react_agent
 from vela.config import VelaConfig
 from vela.events import AgentEvent
 from vela.llm.base import LlmClient
@@ -33,6 +33,7 @@ from vela.task_control import (
     TaskCancelledError,
     resolve_plan_review,
 )
+from vela.tools.base import ToolContext
 from vela.tools.journal import ToolExecutionJournal
 from vela.tools.registry import ToolRegistry
 from vela.types import Message, Usage, UsagePayload
@@ -438,22 +439,26 @@ class LangGraphPlanAgent:
     ) -> _TaskRun:
         run = _TaskRun()
         transcript: list[Message] = []
+        skill_context = SkillContextBuffer()
+        execution_scope = f"{self.thread_id}:{plan.id}:{task.id}" if self._persistent else None
         try:
             async for event in run_react_agent(
-                llm_client=self.llm_client,
-                tool_registry=self.tool_registry,
-                system_prompt=self._task_system_prompt(plan, task),
-                user_message=_task_context(plan, task),
-                history=transcript,
-                cwd=self.cwd,
-                config=self.config,
-                approval_callback=self.approval_callback,
-                skill_context_buffer=SkillContextBuffer(),
-                tool_execution_scope=(
-                    f"{self.thread_id}:{plan.id}:{task.id}" if self._persistent else None
+                _task_context(plan, task),
+                transcript,
+                ReactRuntime(
+                    llm_client=self.llm_client,
+                    tool_registry=self.tool_registry,
+                    system_prompt=self._task_system_prompt(plan, task),
+                    tool_context=ToolContext(
+                        cwd=self.cwd,
+                        config=self.config,
+                        approval_callback=self.approval_callback,
+                        skill_context_buffer=skill_context,
+                        execution_scope=execution_scope,
+                        allow_uncertain_retry=self._allow_uncertain_tool_retry,
+                    ),
+                    max_turns=self.max_task_turns,
                 ),
-                allow_uncertain_tool_retry=self._allow_uncertain_tool_retry,
-                max_turns=self.max_task_turns,
             ):
                 self._collect_task_event(run, task, event, writer)
         except asyncio.CancelledError:

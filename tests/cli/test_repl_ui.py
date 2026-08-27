@@ -27,8 +27,8 @@ from rich.text import Text
 from vela.config import load_config
 from vela.entrypoints.repl_ui import (
     REPL_STYLE_RULES,
+    ApprovalModeController,
     FixedComposerPromptSession,
-    PermissionModeController,
     bottom_toolbar,
     permission_key_bindings,
     prompt_message,
@@ -103,12 +103,12 @@ def test_input_borders_are_inside_the_fixed_composer():
     effective_style = merge_styles([default_ui_style(), Style.from_dict(REPL_STYLE_RULES)])
     assert not effective_style.get_attrs_for_style_str("class:bottom-toolbar").reverse
     assert not effective_style.get_attrs_for_style_str("class:bottom-toolbar.text").reverse
-    count_style = effective_style.get_attrs_for_style_str(
-        "class:bottom-toolbar class:bottom-toolbar.text class:prompt.count.agents"
+    approval_style = effective_style.get_attrs_for_style_str(
+        "class:bottom-toolbar class:bottom-toolbar.text class:toolbar.mode.ask"
     )
-    assert count_style.color == "ansiblue"
-    assert count_style.bgcolor == ""
-    assert not count_style.reverse
+    assert approval_style.color == "ansigreen"
+    assert approval_style.bgcolor == ""
+    assert not approval_style.reverse
 
 
 def test_submitted_composer_is_erased_when_prompt_finishes():
@@ -179,24 +179,19 @@ def test_composer_and_status_use_the_bottom_rows_without_a_gap():
 
 def test_status_is_separate_from_the_redrawn_input_prompt():
     status = prompt_status(
-        cwd="/tmp/project",
         model="deepseek-v4-flash",
-        tools=12,
-        agents_files=2,
-        mcp_servers=1,
-        skills=3,
         stats={"total_tokens": 13187, "context_ratio": 0.013, "has_usage": True},
     )
     status_text = "".join(text for _style, text in status)
     prompt_text = "".join(text for _style, text in prompt_message())
 
-    assert "2 AGENTS.md files" in status_text
-    assert "1 MCP server" in status_text
-    assert "3 skills · Tools 12" in status_text
-    assert "Default  Shift+Tab" in status_text
+    assert "AGENTS.md" not in status_text
+    assert "MCP server" not in status_text
+    assert "Tools" not in status_text
+    assert "Ask  Shift+Tab" in status_text
     assert "deepseek-v4-flash" in status_text
     assert "█░░░░░░░░░░░ 1%" in status_text
-    assert "/tmp/project" in status_text
+    assert "/tmp/project" not in status_text
     assert "❯ " not in status_text
     assert prompt_text == "❯ "
 
@@ -209,36 +204,36 @@ def test_submitted_input_uses_compact_history_format():
     assert str(rendered.style) == "on grey93"
 
 
-def test_permission_mode_toggle_applies_and_restores_full_access_policy(tmp_path):
+def test_approval_mode_toggle_never_disables_safety_guards(tmp_path):
     config = load_config(project_root=tmp_path)
-    config.policy.hitl_mode = "always"
-    controller = PermissionModeController(config)
+    config.policy.approval_mode = "ask"
+    controller = ApprovalModeController(config)
 
-    assert controller.mode == "default"
-    assert config.policy.hitl_mode == "always"
+    assert controller.mode == "ask"
+    assert config.policy.approval_mode == "ask"
     assert config.policy.path_guard_enabled
     assert config.policy.command_guard_enabled
 
     assert controller.toggle() == "auto"
-    assert config.policy.hitl_mode == "never"
-    assert not config.policy.path_guard_enabled
-    assert not config.policy.command_guard_enabled
+    assert config.policy.approval_mode == "auto"
+    assert config.policy.path_guard_enabled
+    assert config.policy.command_guard_enabled
 
-    assert controller.toggle() == "default"
-    assert config.policy.hitl_mode == "always"
+    assert controller.toggle() == "ask"
+    assert config.policy.approval_mode == "ask"
     assert config.policy.path_guard_enabled
     assert config.policy.command_guard_enabled
 
 
-def test_shift_tab_is_bound_to_permission_mode_toggle(tmp_path):
-    controller = PermissionModeController(load_config(project_root=tmp_path))
+def test_shift_tab_is_bound_to_approval_mode_toggle(tmp_path):
+    controller = ApprovalModeController(load_config(project_root=tmp_path))
     bindings = permission_key_bindings(controller)
 
     assert any(binding.keys == (Keys.BackTab,) for binding in bindings.bindings)
 
 
 def test_escape_is_bound_to_running_task_cancel(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     task_controller = InteractiveTaskController()
     bindings = permission_key_bindings(permission, task_controller)
 
@@ -246,7 +241,7 @@ def test_escape_is_bound_to_running_task_cancel(tmp_path):
 
 
 def test_running_task_keeps_draft_but_blocks_submit_until_completion(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     task_controller = InteractiveTaskController()
 
     async def run_prompt() -> tuple[bool, str, str]:
@@ -286,7 +281,7 @@ def test_running_task_keeps_draft_but_blocks_submit_until_completion(tmp_path):
 
 
 def test_running_task_blocks_enter_that_was_buffered_before_prompt_started(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     task_controller = InteractiveTaskController()
 
     async def run_prompt() -> tuple[bool, str]:
@@ -322,7 +317,7 @@ def test_running_task_blocks_enter_that_was_buffered_before_prompt_started(tmp_p
 
 
 def test_running_task_still_allows_cancel_command(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     task_controller = InteractiveTaskController()
 
     async def run_prompt() -> str:
@@ -352,7 +347,7 @@ def test_running_task_still_allows_cancel_command(tmp_path):
 
 
 def test_running_task_allows_tool_approval_response(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     task_controller = InteractiveTaskController()
     approval_result = ""
 
@@ -390,7 +385,7 @@ def test_running_task_allows_tool_approval_response(tmp_path):
 
 
 def test_running_task_allows_plan_review_response(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     task_controller = InteractiveTaskController()
 
     async def run_prompt() -> tuple[str, str]:
@@ -418,14 +413,14 @@ def test_running_task_allows_plan_review_response(tmp_path):
 
 
 def test_ctrl_v_is_bound_to_clipboard_image(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     bindings = permission_key_bindings(permission)
 
     assert any(binding.keys == (Keys.ControlV,) for binding in bindings.bindings)
 
 
 def test_ctrl_v_injects_image_reference_without_submitting(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     image_path = tmp_path / "screen shot.png"
 
     async def run_prompt() -> str:
@@ -448,7 +443,7 @@ def test_ctrl_v_injects_image_reference_without_submitting(tmp_path):
 
 
 def test_ctrl_v_failure_preserves_existing_input(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     console = Console(file=StringIO(), color_system=None)
 
     async def run_prompt() -> str:
@@ -480,7 +475,7 @@ def test_ctrl_v_failure_preserves_existing_input(tmp_path):
 
 
 def test_ctrl_v_capture_does_not_block_prompt_event_loop(tmp_path):
-    permission = PermissionModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config(project_root=tmp_path))
     image_path = tmp_path / "screen.png"
 
     def slow_grabber() -> ClipboardImageResult:
@@ -518,8 +513,8 @@ def test_ctrl_v_capture_does_not_block_prompt_event_loop(tmp_path):
     assert result == f"@image:<{image_path}> "
 
 
-def test_shift_tab_input_toggles_live_permission_mode(tmp_path):
-    controller = PermissionModeController(load_config(project_root=tmp_path))
+def test_shift_tab_input_toggles_live_approval_mode(tmp_path):
+    controller = ApprovalModeController(load_config(project_root=tmp_path))
 
     async def run_prompt() -> None:
         with create_pipe_input() as pipe_input:
@@ -534,12 +529,11 @@ def test_shift_tab_input_toggles_live_permission_mode(tmp_path):
     asyncio.run(run_prompt())
 
     assert controller.mode == "auto"
-    assert controller.config.policy.hitl_mode == "never"
+    assert controller.config.policy.approval_mode == "auto"
 
 
 def test_bottom_toolbar_uses_runtime_summary_segments():
     toolbar = bottom_toolbar(
-        "/Users/me/project",
         "deepseek-v4-flash",
         {"turns": 1, "total_tokens": 13187, "context_ratio": 0.013, "has_usage": True},
     )
@@ -547,14 +541,13 @@ def test_bottom_toolbar_uses_runtime_summary_segments():
     assert ("class:toolbar.model", "deepseek-v4-flash") in toolbar
     assert ("class:toolbar.ctx.bar", "█░░░░░░░░░░░") in toolbar
     assert ("class:toolbar.ctx.value", "1%") in toolbar
-    assert ("class:toolbar.cwd.value", "/Users/me/project") in toolbar
+    assert not any("/Users/me/project" in text for _style, text in toolbar)
     assert not any(text == " TURN " for _style, text in toolbar)
     assert not any("Token" in text for _style, text in toolbar)
 
 
 def test_bottom_toolbar_exposes_unified_task_state():
     toolbar = bottom_toolbar(
-        "/tmp/project",
         "fake-model",
         task_state=TaskState.CANCELLING,
     )

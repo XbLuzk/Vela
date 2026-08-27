@@ -12,11 +12,8 @@ from vela.branding import CLI_NAME, PRODUCT_NAME
 from vela.config import config_to_public_dict
 from vela.entrypoints.model_command import handle_model_command
 from vela.entrypoints.repl_tasks import print_session_warning, start_plan
-from vela.entrypoints.repl_ui import PermissionMode, permission_mode_label
-from vela.entrypoints.trace_command import parse_trace_args, show_run_traces
+from vela.entrypoints.repl_ui import ApprovalMode, approval_mode_label
 from vela.memory import MemoryManager, memory_manager_for
-from vela.policy import AuditLog
-from vela.run_trace import RunTraceStore
 from vela.session import ActiveSession
 from vela.skill import SkillRegistry
 from vela.trust import ProjectTrustStore
@@ -29,22 +26,15 @@ SLASH_COMMANDS = [
     "/exit",
     "/clear",
     "/cancel",
-    "/sessions",
-    "/resume",
+    "/session",
     "/context",
     "/memory",
     "/save",
-    "/config",
-    "/tools",
+    "/status",
     "/hitl",
-    "/policy",
-    "/audit",
     "/plan",
     "/model",
-    "/usage",
-    "/trace",
     "/skill",
-    "/mcp",
     "/trust",
 ]
 
@@ -53,7 +43,8 @@ Task controls
   /cancel              Cancel the current Agent, tool, or Plan task
   New task             Draft while running; Enter unlocks after completion
   Esc                   Cancel the current task
-  Ctrl+C                Cancel once; press again while cancelling to exit Vela
+  Ctrl+C                Cancel the current task; never exits Vela
+  Ctrl+D                Exit Vela
   Ctrl+V                Save a macOS clipboard image and insert an @image reference
 
 Plan review
@@ -62,13 +53,10 @@ Plan review
   cancel                Cancel before execution starts
 
 Sessions
-  /sessions             List sessions for the current project
-  /resume [id|number]   Resume a previous session
+  /session              List sessions for the current project
+  /session current      Show the active session
+  /session resume <ref> Resume by session ID or list number
   /plan --resume        Resume that session's interrupted LangGraph plan
-
-Runs
-  /trace                List recent Agent runs
-  /trace <id|number>    Inspect one persisted run summary
 
 Project trust
   /trust                Trust project config, MCP, and Skills after restart
@@ -78,6 +66,16 @@ Other commands
   {commands}
 """
 
+MOVED_COMMANDS = {
+    "/config": "/status config",
+    "/policy": "/status policy",
+    "/tools": "/status tools",
+    "/usage": "/status usage",
+    "/mcp": "/status mcp",
+    "/sessions": "/session list",
+    "/resume": "/session resume <id|number>",
+}
+
 
 async def handle_slash(raw: str, runtime: ReplRuntime) -> bool:
     """Dispatch one slash command and return whether the REPL should exit."""
@@ -86,10 +84,12 @@ async def handle_slash(raw: str, runtime: ReplRuntime) -> bool:
     if command in {"/exit", "/quit"}:
         return True
 
-    if command in {"/help", "/cancel", "/clear"}:
+    if command in MOVED_COMMANDS:
+        runtime.console.print(f"[yellow]Moved:[/yellow] use {MOVED_COMMANDS[command]}")
+    elif command in {"/help", "/cancel", "/clear"}:
         _handle_repl_command(command, runtime)
-    elif command in {"/sessions", "/resume"}:
-        _handle_session_command(command, arg, runtime)
+    elif command == "/session":
+        _handle_session_command(arg, runtime)
     elif command in {"/context", "/memory", "/save"}:
         handle_context_command(command, arg, runtime)
     elif command == "/plan":
@@ -100,16 +100,10 @@ async def handle_slash(raw: str, runtime: ReplRuntime) -> bool:
     elif command == "/trust":
         handle_trust_command(arg, runtime)
     elif command in {
-        "/config",
-        "/tools",
+        "/status",
         "/hitl",
-        "/policy",
-        "/audit",
         "/model",
-        "/usage",
-        "/trace",
         "/skill",
-        "/mcp",
     }:
         await handle_settings_command(command, arg, runtime)
     else:
@@ -135,11 +129,20 @@ def _handle_repl_command(command: str, runtime: ReplRuntime) -> None:
         runtime.console.clear()
 
 
-def _handle_session_command(command: str, arg: str, runtime: ReplRuntime) -> None:
-    if command == "/sessions":
+def _handle_session_command(arg: str, runtime: ReplRuntime) -> None:
+    subcommand, _, reference = arg.partition(" ")
+    if subcommand in {"", "list"}:
         _sessions_command(runtime.console, runtime.active_session)
+    elif subcommand == "current":
+        record = runtime.active_session.current
+        runtime.console.print(
+            f"Current {record.id} ({record.message_count} messages) · "
+            f"{record.title or '(untitled)'}"
+        )
+    elif subcommand == "resume" and reference.strip():
+        _resume_command(reference.strip(), runtime)
     else:
-        _resume_command(arg, runtime)
+        runtime.console.print("[red]Usage:[/red] /session [list|current|resume <id|number>]")
 
 
 def handle_trust_command(arg: str, runtime: ReplRuntime) -> None:
@@ -217,23 +220,10 @@ def handle_context_command(command: str, arg: str, runtime: ReplRuntime) -> None
 
 
 async def handle_settings_command(command: str, arg: str, runtime: ReplRuntime) -> None:
-    config = runtime.config
-    if command == "/config":
-        runtime.console.print_json(json.dumps(config_to_public_dict(config), ensure_ascii=False))
-    elif command == "/tools":
-        runtime.console.print("\n".join(runtime.registry.list_names()))
+    if command == "/status":
+        _handle_status(arg, runtime)
     elif command == "/hitl":
         _handle_hitl(arg, runtime)
-    elif command == "/policy":
-        runtime.console.print_json(
-            json.dumps(config_to_public_dict(config)["policy"], ensure_ascii=False)
-        )
-    elif command == "/audit":
-        limit = int(arg or "20") if (arg or "20").isdigit() else 20
-        audit_log = AuditLog(config.policy.audit_log_path)
-        runtime.console.print_json(json.dumps(audit_log.tail(limit), ensure_ascii=False))
-        if audit_log.last_warning:
-            runtime.console.print(f"[yellow]{audit_log.last_warning}[/yellow]")
     elif command == "/model":
         await handle_model_command(
             arg,
@@ -241,23 +231,66 @@ async def handle_settings_command(command: str, arg: str, runtime: ReplRuntime) 
             runtime.agent,
             runtime.renderer,
         )
-    elif command == "/usage":
+    else:
+        _handle_skill(arg, runtime)
+
+
+def _handle_status(section: str, runtime: ReplRuntime) -> None:
+    section = section.strip().lower()
+    if section == "":
+        table = Table(title=f"{PRODUCT_NAME} Status")
+        table.add_column("Field")
+        table.add_column("Value")
+        table.add_row("model", runtime.agent.llm_client.model_name)
+        table.add_row("approval", approval_mode_label(runtime.approval_mode.mode))
+        table.add_row("task", runtime.task_controller.state.value)
+        table.add_row("session", runtime.active_session.current.id)
+        table.add_row("tools", str(len(runtime.registry.list_names())))
+        table.add_row(
+            "skills",
+            str(
+                len(
+                    SkillRegistry(
+                        runtime.cwd,
+                        include_project=runtime.config.project_trusted,
+                    ).list()
+                )
+            ),
+        )
+        manager = runtime.mcp_manager
+        mcp_count = (
+            sum(1 for spec in manager.specs.values() if spec.enabled) if manager is not None else 0
+        )
+        table.add_row("mcp", str(mcp_count) if manager is not None else "unavailable")
+        runtime.console.print(table)
+    elif section == "config":
+        runtime.console.print_json(
+            json.dumps(config_to_public_dict(runtime.config), ensure_ascii=False)
+        )
+    elif section == "policy":
+        policy = runtime.config.policy
+        runtime.console.print_json(
+            json.dumps(
+                {
+                    "approval_mode": policy.approval_mode,
+                    "path_guard_enabled": policy.path_guard_enabled,
+                    "command_guard_enabled": policy.command_guard_enabled,
+                },
+                ensure_ascii=False,
+            )
+        )
+    elif section == "tools":
+        runtime.console.print("\n".join(runtime.registry.list_names()) or "(no tools)")
+    elif section == "usage":
         runtime.console.print_json(
             json.dumps(runtime.agent.last_usage.to_dict(), ensure_ascii=False)
         )
-    elif command == "/trace":
-        reference, json_output = parse_trace_args(arg)
-        store = getattr(runtime.agent, "trace_store", None) or RunTraceStore()
-        show_run_traces(
-            runtime.console,
-            store,
-            reference=reference,
-            json_output=json_output,
-        )
-    elif command == "/skill":
-        _handle_skill(arg, runtime)
-    else:
+    elif section == "mcp":
         _handle_mcp(runtime)
+    else:
+        runtime.console.print(
+            "[red]Unknown status section.[/red] Use /status [config|policy|tools|usage|mcp]"
+        )
 
 
 def _handle_mcp(runtime: ReplRuntime) -> None:
@@ -310,18 +343,18 @@ def _handle_memory(arg: str, runtime: ReplRuntime, manager: MemoryManager) -> No
 
 
 def _handle_hitl(arg: str, runtime: ReplRuntime) -> None:
-    aliases: dict[str, PermissionMode] = {
-        "default": "default",
-        "on": "default",
+    aliases: dict[str, ApprovalMode] = {
+        "ask": "ask",
+        "on": "ask",
         "auto": "auto",
         "off": "auto",
     }
     if arg in aliases:
-        runtime.permission_mode.set(aliases[arg])
+        runtime.approval_mode.set(aliases[arg])
     elif arg:
-        runtime.console.print("[red]Usage:[/red] /hitl default|auto")
+        runtime.console.print("[red]Usage:[/red] /hitl ask|auto")
         return
-    runtime.console.print(f"Permission mode: {permission_mode_label(runtime.permission_mode.mode)}")
+    runtime.console.print(f"Approval mode: {approval_mode_label(runtime.approval_mode.mode)}")
 
 
 def _handle_skill(arg: str, runtime: ReplRuntime) -> None:

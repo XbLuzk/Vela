@@ -1,6 +1,6 @@
 """Shared helpers for Vela's private user-level state on disk.
 
-Vela keeps sessions, traces, journals, caches and trust decisions under
+Vela keeps sessions, journals, caches and trust decisions under
 ``~/.vela`` with owner-only permissions. These helpers centralize the
 directory layout, the permission bits and the SQLite connection settings that
 every store relies on.

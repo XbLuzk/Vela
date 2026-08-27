@@ -21,6 +21,7 @@ def test_config_precedence(tmp_path, monkeypatch):
     (project / ".env").write_text("VELA_MODEL=env-file-model\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("VELA_PROVIDER", "process")
+    monkeypatch.setenv("VELA_MODEL", "process-model")
 
     config = load_config(
         project_root=project,
@@ -28,7 +29,7 @@ def test_config_precedence(tmp_path, monkeypatch):
     )
 
     assert config.llm.provider == "process"
-    assert config.llm.model == "cli-model"
+    assert config.llm.model == "process-model"
 
 
 def test_provider_specific_api_key(tmp_path, monkeypatch):

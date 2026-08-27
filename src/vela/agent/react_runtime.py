@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,7 +15,7 @@ from vela.image import parse_image_references
 from vela.llm.base import LlmClient
 from vela.prompt import PromptAssembler
 from vela.skill import SkillContextBuffer, SkillRegistry
-from vela.tools.base import ToolContext, ToolDecision, ToolResult
+from vela.tools.base import ToolContext, ToolResult
 from vela.tools.calls import tool_call_arguments, tool_call_name
 from vela.tools.executor import ToolExecutor
 from vela.tools.registry import ToolRegistry
@@ -23,7 +23,18 @@ from vela.types import Message, Usage
 
 
 @dataclass(slots=True)
-class _ReactContext:
+class ReactRuntime:
+    """Stable dependencies for one or more ordinary ReAct requests."""
+
+    llm_client: LlmClient
+    tool_registry: ToolRegistry
+    system_prompt: str
+    tool_context: ToolContext
+    max_turns: int = 20
+
+
+@dataclass(slots=True)
+class _PreparedReactRun:
     llm_client: LlmClient
     config: VelaConfig
     cwd: str
@@ -37,21 +48,9 @@ class _ReactContext:
 
 
 async def run_react_agent(
-    *,
-    llm_client: LlmClient,
-    tool_registry: ToolRegistry,
-    system_prompt: str,
     user_message: str,
     history: list[Message] | None,
-    cwd: str,
-    config: VelaConfig,
-    approval_callback: (
-        Callable[[dict[str, Any]], Awaitable[ToolDecision] | ToolDecision] | None
-    ) = None,
-    skill_context_buffer: SkillContextBuffer | None = None,
-    tool_execution_scope: str | None = None,
-    allow_uncertain_tool_retry: bool = False,
-    max_turns: int = 20,
+    runtime: ReactRuntime,
 ) -> AsyncIterator[AgentEvent]:
     """Run one request and update a supplied ``history`` transcript in place.
 
@@ -59,10 +58,13 @@ async def run_react_agent(
     safely persist completed model and tool work after cancellation or failure.
     """
 
-    if max_turns < 1:
+    if runtime.max_turns < 1:
         yield {"type": "error", "error": ValueError("max_turns must be at least 1")}
         return
 
+    cwd = runtime.tool_context.cwd
+    config = runtime.tool_context.config
+    skill_context_buffer = runtime.tool_context.skill_context_buffer
     original_user_message = user_message
     user_message = _prepend_skill_candidates(user_message, cwd, config)
     user_message = _prepend_skill_context(user_message, skill_context_buffer)
@@ -70,42 +72,35 @@ async def run_react_agent(
     transcript = history if history is not None else []
     transcript.append(Message(role="user", content=parse_image_references(user_message, cwd)))
 
-    runtime = _ReactContext(
-        llm_client=llm_client,
+    prepared = _PreparedReactRun(
+        llm_client=runtime.llm_client,
         config=config,
         cwd=cwd,
         transcript=transcript,
-        tool_definitions=tool_registry.definitions(),
+        tool_definitions=runtime.tool_registry.definitions(),
         system_prompt=_build_system_prompt(
-            base=system_prompt,
+            base=runtime.system_prompt,
             user_message=original_user_message,
-            llm_client=llm_client,
-            tool_registry=tool_registry,
+            llm_client=runtime.llm_client,
+            tool_registry=runtime.tool_registry,
             cwd=cwd,
             config=config,
         ),
-        context_engine=_context_engine(llm_client, config),
-        tool_executor=ToolExecutor(tool_registry),
-        tool_context=ToolContext(
-            cwd=cwd,
-            config=config,
-            approval_callback=approval_callback,
-            skill_context_buffer=skill_context_buffer,
-            execution_scope=tool_execution_scope,
-            allow_uncertain_retry=allow_uncertain_tool_retry,
-        ),
+        context_engine=_context_engine(runtime.llm_client, config),
+        tool_executor=ToolExecutor(runtime.tool_registry),
+        tool_context=runtime.tool_context,
         skill_context_buffer=skill_context_buffer,
     )
 
     total_usage = Usage()
     completed_turns = 0
     try:
-        for turn_number in range(1, max_turns + 1):
+        for turn_number in range(1, runtime.max_turns + 1):
             model_turn = ModelTurn()
             turn_stream = _stream_react_turn(
-                runtime,
+                prepared,
                 turn_number=turn_number,
-                max_turns=max_turns,
+                max_turns=runtime.max_turns,
                 turn=model_turn,
             )
             try:
@@ -139,7 +134,7 @@ async def run_react_agent(
 
 
 async def _stream_react_turn(
-    runtime: _ReactContext,
+    runtime: _PreparedReactRun,
     *,
     turn_number: int,
     max_turns: int,
@@ -200,7 +195,7 @@ async def _stream_react_turn(
 
 async def _stream_model_with_overflow_recovery(
     *,
-    runtime: _ReactContext,
+    runtime: _PreparedReactRun,
     turn: ModelTurn,
 ) -> AsyncIterator[AgentEvent]:
     overflow_retried = False
@@ -375,13 +370,8 @@ def _context_engine(llm_client: LlmClient, config: VelaConfig) -> ContextEngine:
         ContextBudget(
             context_window=llm_client.max_context_window,
             max_output_tokens=config.llm.max_tokens,
-            compression_threshold=config.memory.compression_threshold,
-            compression_target=config.memory.compression_target,
-            reserve_tokens=config.memory.compression_reserve_tokens,
         ),
         max_history_messages=config.memory.max_conversation_history,
-        min_recent_messages=config.memory.min_recent_messages,
-        summary_max_chars=config.memory.summary_max_chars,
     )
 
 

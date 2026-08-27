@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from vela.config import load_config
-from vela.entrypoints.repl_ui import PermissionModeController
+from vela.entrypoints.repl_ui import ApprovalModeController
 from vela.tools.base import Tool, ToolContext, ToolResult, object_schema
 from vela.tools.executor import ToolExecutor
 from vela.tools.registry import ToolRegistry
@@ -12,7 +12,7 @@ from vela.tools.registry import ToolRegistry
 def test_auto_mode_runs_approval_required_tool_without_callback(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config = load_config(project_root=tmp_path)
-    controller = PermissionModeController(config)
+    controller = ApprovalModeController(config)
     executions: list[str] = []
 
     async def mutate(payload, _context):

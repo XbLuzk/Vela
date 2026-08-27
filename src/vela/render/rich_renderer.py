@@ -49,7 +49,6 @@ class RichRenderer:
         self._last_total_tokens = 0
         self._last_context_ratio = 0.0
         self._last_has_usage = False
-        self._current_run_id = ""
 
     def set_context_window(self, context_window: int | None) -> None:
         self._context_window = context_window or self._context_window
@@ -62,7 +61,6 @@ class RichRenderer:
         self._input_tokens = 0
         self._output_tokens = 0
         self._last_input_tokens = 0
-        self._current_run_id = ""
 
     def toolbar_status(self) -> dict[str, Any]:
         return {
@@ -101,13 +99,7 @@ class RichRenderer:
             self._handle_plan_event(event_type, event)
         elif event_type in {"tool_call", "tool_result"}:
             self._handle_tool_event(event_type, event)
-        elif event_type in {
-            "run_started",
-            "usage",
-            "error",
-            "done",
-            "run_finished",
-        }:
+        elif event_type in {"usage", "error", "done"}:
             self._handle_run_event(event_type, event)
 
     def _handle_response_event(self, event_type: str, event: AgentEvent) -> None:
@@ -157,9 +149,7 @@ class RichRenderer:
             self._print_tool_result(event)
 
     def _handle_run_event(self, event_type: str, event: AgentEvent) -> None:
-        if event_type == "run_started":
-            self._current_run_id = str(event.get("run_id") or "")
-        elif event_type == "usage":
+        if event_type == "usage":
             self._record_usage(event.get("usage") or {})
         elif event_type == "error":
             self._flush_thinking()
@@ -172,8 +162,6 @@ class RichRenderer:
             warning = str(event.get("warning") or "")
             if warning:
                 self.console.print(Text(warning, style="yellow"))
-        elif event_type == "run_finished":
-            self._print_run_finished(event)
 
     def newline(self) -> None:
         self._flush_thinking()
@@ -275,15 +263,16 @@ class RichRenderer:
         self._last_context_ratio = context_ratio
         self._last_has_usage = has_usage
 
-    def _print_run_finished(self, event: AgentEvent) -> None:
-        trace = event.get("trace") or {}
-        run_id = str(trace.get("run_id") or self._current_run_id)
-        status = str(trace.get("status") or "completed")
-        duration_ms = int(trace.get("duration_ms") or 0)
-        turns = int(trace.get("turns") or 0)
-        usage = trace.get("usage") or {}
-        tokens = int(usage.get("total_tokens") or 0)
-        tools = int(trace.get("tool_calls") or 0)
+    def print_run_summary(
+        self,
+        *,
+        status: str,
+        duration_ms: int,
+        turns: int,
+        tool_calls: int,
+        total_tokens: int,
+    ) -> None:
+        """Render a non-persisted one-line summary for the current task."""
         label = {
             "completed": "Completed",
             "cancelled": "Cancelled",
@@ -292,17 +281,12 @@ class RichRenderer:
         details = [
             f"{duration_ms / 1_000:.2f}s",
             _plural_count(turns, "turn"),
-            _plural_count(tools, "tool"),
+            _plural_count(tool_calls, "tool"),
         ]
-        if tokens:
-            details.append(f"{_compact_number(tokens)} tokens")
+        if total_tokens:
+            details.append(f"{_compact_number(total_tokens)} tokens")
         summary = f"✦ {label} in " + " · ".join(details)
-        if label != "Completed" and run_id:
-            summary += f" · {run_id.removeprefix('run_')}"
         self._print_compact_line(Text(summary, style="dim"))
-        warning = str(event.get("warning") or "")
-        if warning:
-            self.console.print(Text(warning, style="yellow"))
 
     def _print_compact_line(self, line: Text) -> None:
         line.truncate(max(20, self.console.width - 1), overflow="ellipsis")
@@ -332,7 +316,7 @@ class RichRenderer:
         for line in [
             "A quieter terminal workspace for focused agent runs",
             "ReAct, LangGraph Plan, tools, skills, and MCP",
-            "Use /help for commands and /config for settings",
+            "Use /help for commands and /status for settings",
         ]:
             notes.append("- ", style="dim")
             notes.append(line, style="dim")

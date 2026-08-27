@@ -28,7 +28,7 @@ def test_cancelled_plan_task_retains_incremental_tool_transcript(tmp_path, monke
     second_started = asyncio.Event()
     registry = _two_tool_registry(second_started)
     config = load_config(project_root=tmp_path)
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
     agent = LangGraphPlanAgent(
         llm_client=TwoToolClient(),
         tool_registry=registry,
@@ -337,8 +337,7 @@ def test_plan_resume_replays_completed_tool_and_retries_only_uncertain_call(tmp_
         )
 
     config = load_config(project_root=tmp_path)
-    config.policy.hitl_mode = "never"
-    config.features.audit_log = False
+    config.policy.approval_mode = "auto"
     config.tools.execution_journal_path = str(tmp_path / "tool-executions.sqlite")
     first_agent = LangGraphPlanAgent(
         llm_client=JournalResumeClient(),
@@ -395,8 +394,7 @@ def test_one_shot_plan_does_not_create_orphan_tool_journal(tmp_path, monkeypatch
             )
         )
     config = load_config(project_root=tmp_path)
-    config.policy.hitl_mode = "never"
-    config.features.audit_log = False
+    config.policy.approval_mode = "auto"
     journal_path = tmp_path / "tool-executions.sqlite"
     config.tools.execution_journal_path = str(journal_path)
     agent = LangGraphPlanAgent(

@@ -256,41 +256,29 @@ def test_long_thinking_is_collapsed_to_one_summary_line():
     assert len(thinking_line) < 190
 
 
-def test_run_finished_renders_compact_summary_and_only_keeps_failed_run_id():
+def test_run_summary_is_compact_and_has_no_persisted_identifier():
     stream = StringIO()
     renderer = RichRenderer(console=Console(file=stream, color_system=None, width=120))
 
-    renderer.handle(
-        {
-            "type": "run_finished",
-            "trace": {
-                "run_id": "run_success123",
-                "status": "completed",
-                "duration_ms": 4020,
-                "turns": 2,
-                "tool_calls": 1,
-                "usage": {"total_tokens": 6513},
-            },
-        }
+    renderer.print_run_summary(
+        status="completed",
+        duration_ms=4020,
+        turns=2,
+        tool_calls=1,
+        total_tokens=6513,
     )
-    renderer.handle(
-        {
-            "type": "run_finished",
-            "trace": {
-                "run_id": "run_failed456",
-                "status": "failed",
-                "duration_ms": 500,
-                "turns": 0,
-                "tool_calls": 0,
-                "usage": {"total_tokens": 0},
-            },
-        }
+    renderer.print_run_summary(
+        status="failed",
+        duration_ms=500,
+        turns=0,
+        tool_calls=0,
+        total_tokens=0,
     )
 
     output = stream.getvalue()
     assert "✦ Completed in 4.02s · 2 turns · 1 tool · 6.5k tokens" in output
-    assert "success123" not in output
-    assert "✦ Failed in 0.50s · 0 turns · 0 tools · failed456" in output
+    assert "✦ Failed in 0.50s · 0 turns · 0 tools" in output
+    assert "run_" not in output
 
 
 def test_start_run_resets_token_usage():
@@ -319,7 +307,7 @@ def test_missing_usage_keeps_toolbar_tokens_unavailable():
     renderer.handle({"type": "done", "total_turns": 1, "total_tokens": 0})
 
     assert "Run Summary" not in stream.getvalue()
-    toolbar = bottom_toolbar("/tmp/project", "deepseek-v4-flash", renderer.toolbar_status())
+    toolbar = bottom_toolbar("deepseek-v4-flash", renderer.toolbar_status())
     assert ("class:toolbar.model", "deepseek-v4-flash") in toolbar
     assert ("class:toolbar.ctx.bar", "░░░░░░░░░░░░") in toolbar
     assert ("class:toolbar.ctx.value", "0%") in toolbar

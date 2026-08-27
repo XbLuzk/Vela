@@ -10,7 +10,7 @@ from vela.tools.base import Tool, ToolContext
 def _context(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config = load_config(project_root=tmp_path)
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
     return ToolContext(cwd=str(tmp_path), config=config)
 
 

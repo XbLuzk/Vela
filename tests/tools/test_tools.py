@@ -16,7 +16,7 @@ from vela.tools.process import stop_subprocess
 def test_read_write_file_tool(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config = load_config(project_root=tmp_path)
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
     context = ToolContext(cwd=str(tmp_path), config=config)

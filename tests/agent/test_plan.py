@@ -165,7 +165,7 @@ def test_plan_execute_runs_independent_tasks_in_parallel(tmp_path, monkeypatch):
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
     config = load_config(project_root=tmp_path)
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
     agent = LangGraphPlanAgent(
         llm_client=client,
         tool_registry=registry,

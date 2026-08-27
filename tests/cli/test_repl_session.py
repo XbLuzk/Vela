@@ -19,7 +19,6 @@ from vela.entrypoints.repl_tasks import (
     run_events,
 )
 from vela.render.rich_renderer import RichRenderer
-from vela.run_trace import RunTrace, RunTracker
 from vela.session import ActiveSession, SessionStore
 from vela.task_control import InteractiveTaskController, TaskState
 from vela.tools import ToolRegistry
@@ -44,12 +43,13 @@ def test_repl_lists_and_resumes_a_persisted_session(tmp_path):
     console = Console(file=stream, color_system=None, width=160)
     runtime = _repl_runtime(project, active, agent, console)
 
-    asyncio.run(handle_slash("/sessions", runtime))
-    asyncio.run(handle_slash("/resume", runtime))
+    asyncio.run(handle_slash("/session list", runtime))
+    asyncio.run(handle_slash(f"/session resume {previous.id}", runtime))
 
     output = stream.getvalue()
-    assert "/sessions" in SLASH_COMMANDS
-    assert "/resume" in SLASH_COMMANDS
+    assert "/session" in SLASH_COMMANDS
+    assert "/sessions" not in SLASH_COMMANDS
+    assert "/resume" not in SLASH_COMMANDS
     assert previous.id in output
     assert "continue this feature" in output
     assert f"Resumed {previous.id}" in output
@@ -67,7 +67,7 @@ def test_resume_command_accepts_explicit_index_or_id(tmp_path, reference_kind):
     store.save(target.id, [Message(role="user", content="target history")])
     active = ActiveSession.open(project, resume=False, store=store)
     reference = "2" if reference_kind == "index" else target.id
-    agent, output = _run_session_command(f"/resume {reference}", project, active)
+    agent, output = _run_session_command(f"/session resume {reference}", project, active)
 
     assert active.current.id == target.id
     assert agent.history[0].content == "target history"
@@ -87,7 +87,7 @@ def test_resume_command_reports_missing_or_ambiguous_reference(tmp_path, referen
     active = ActiveSession.open(project, resume=False, store=store)
     current_id = active.current.id
 
-    agent, output = _run_session_command(f"/resume {reference}", project, active)
+    agent, output = _run_session_command(f"/session resume {reference}", project, active)
 
     assert active.current.id == current_id
     assert agent.history == []
@@ -123,43 +123,38 @@ def test_agent_retains_user_message_when_cancelled(tmp_path, monkeypatch):
     assert "keep cancelled request" in str(agent.history[-1].content)
 
 
-def test_repl_consumes_run_finished_before_raising_agent_error(tmp_path) -> None:
+def test_repl_prints_failed_summary_before_raising_agent_error(tmp_path) -> None:
     stream = StringIO()
     renderer = RichRenderer(Console(file=stream, color_system=None, width=160))
-    tracker = RunTracker(
-        mode="react",
-        model="fake-model",
-        provider="fake-provider",
-        cwd=str(tmp_path),
-    )
 
     async def failed_events():
         yield {"type": "error", "error": RuntimeError("provider failed")}
 
     with pytest.raises(RuntimeError, match="provider failed"):
-        asyncio.run(run_events(tracker.stream(failed_events()), renderer))
+        asyncio.run(run_events(failed_events(), renderer))
 
     output = stream.getvalue()
-    assert "failed" in output
-    assert tracker.trace.run_id.removeprefix("run_") in output
+    assert "Failed" in output
+    assert "run_" not in output
 
 
-def test_repl_renders_cancelled_trace_before_propagating_cancel(tmp_path, monkeypatch) -> None:
+def test_repl_treats_stream_exhaustion_as_failure(tmp_path) -> None:
+    stream = StringIO()
+    renderer = RichRenderer(Console(file=stream, color_system=None, width=160))
+
+    async def incomplete_events():
+        yield {"type": "turn_started", "turn": 1}
+
+    with pytest.raises(RuntimeError, match="ended before completion"):
+        asyncio.run(run_events(incomplete_events(), renderer))
+
+    assert "Failed" in stream.getvalue()
+
+
+def test_repl_propagates_cancel_and_preserves_session(tmp_path, monkeypatch) -> None:
     store = SessionStore(tmp_path / "sessions.db")
     active = ActiveSession.open(tmp_path / "project", store=store)
     agent = _FakeAgent()
-    agent.last_run_trace = RunTrace(
-        run_id="run_cancelled123",
-        status="cancelled",
-        mode="react",
-        model="fake-model",
-        provider="fake-provider",
-        cwd=str(tmp_path),
-        session_id=active.current.id,
-        started_at="2026-08-14T00:00:00+00:00",
-        finished_at="2026-08-14T00:00:01+00:00",
-        duration_ms=1_000,
-    )
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=160)
 
@@ -179,8 +174,8 @@ def test_repl_renders_cancelled_trace_before_propagating_cancel(tmp_path, monkey
             )
         )
 
-    assert "cancelled123" in stream.getvalue()
-    assert "cancelled" in stream.getvalue()
+    assert active.current.message_count == 1
+    assert "cancelled" in str(active.current.messages[0].content).lower()
 
 
 def test_agent_plan_mode_preserves_prior_history(tmp_path, monkeypatch):
@@ -375,7 +370,7 @@ def test_cancelled_run_keeps_completed_tool_result_and_closes_only_pending_call(
     assert "cancelled" in str(tool_messages["call_2"].content)
 
 
-def test_ctrl_c_first_cancels_running_task_and_second_exits(tmp_path):
+def test_ctrl_c_cancels_but_never_exits_repl(tmp_path):
     store = SessionStore(tmp_path / "sessions.db")
     active = ActiveSession.open(tmp_path / "project", store=store)
     controller = InteractiveTaskController()
@@ -387,6 +382,8 @@ def test_ctrl_c_first_cancels_running_task_and_second_exits(tmp_path):
 
         async def prompt_async(self, **_kwargs):
             self.calls += 1
+            if self.calls == 3:
+                raise EOFError
             raise KeyboardInterrupt
 
     prompt_session = InterruptSession()
@@ -411,9 +408,9 @@ def test_ctrl_c_first_cancels_running_task_and_second_exits(tmp_path):
 
     asyncio.run(run())
 
-    assert prompt_session.calls == 2
+    assert prompt_session.calls == 3
     assert controller.state == TaskState.CANCELLED
-    assert "再次 Ctrl+C" in console.file.getvalue()
+    assert "Ctrl+D 或 /exit" in console.file.getvalue()
 
 
 def test_repl_opens_the_next_draft_prompt_while_task_is_running(tmp_path, monkeypatch):
@@ -558,7 +555,7 @@ def test_help_explains_cancel_plan_review_and_resume_contracts(tmp_path):
     assert "/cancel" in output
     assert "Draft while running; Enter unlocks after completion" in output
     assert "modify <requirement>" in output
-    assert "/resume [id|number]" in output
+    assert "/session resume <ref>" in output
     assert "Ctrl+C" in output
 
 
@@ -634,7 +631,7 @@ def _repl_runtime(project, active, agent, console, *, task_controller=None):
         config=config,
         agent=agent,
         registry=registry,
-        permission_mode=repl.PermissionModeController(config),
+        approval_mode=repl.ApprovalModeController(config),
         renderer=RichRenderer(console),
         active_session=active,
         task_controller=controller,

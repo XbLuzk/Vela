@@ -42,7 +42,7 @@ def test_code_rag_runs_through_the_real_stdio_mcp_boundary(tmp_path, monkeypatch
         tools = await manager.load_tools()
         by_name = {tool.name: tool for tool in tools}
         config = load_config(project_root=tmp_path)
-        config.policy.hitl_mode = "never"
+        config.policy.approval_mode = "auto"
         context = ToolContext(cwd=str(tmp_path), config=config)
         searched = await by_name["mcp__code-rag__search_code"].execute(
             {"query": "resume session"}, context

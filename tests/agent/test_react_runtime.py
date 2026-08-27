@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 import pytest
 
 from vela.agent import Agent
-from vela.agent.react_runtime import run_react_agent
+from vela.agent.react_runtime import ReactRuntime, run_react_agent
 from vela.config import load_config
 from vela.context import ContextOverflowError
 from vela.tools import ToolRegistry, get_builtin_tools
-from vela.tools.base import Tool, ToolResult, object_schema
+from vela.tools.base import Tool, ToolContext, ToolResult, object_schema
 from vela.types import Message
 
 
@@ -87,7 +86,7 @@ class SkillLoadingClient:
 class UsageAndCompressionClient:
     model_name = "fake-model"
     provider_name = "fake-provider"
-    max_context_window = 2_000
+    max_context_window = 3_000
 
     def __init__(self):
         self.saw_summary = False
@@ -352,7 +351,6 @@ def test_react_loop_preserves_stream_event_order(tmp_path, monkeypatch):
     events = asyncio.run(run())
 
     assert [event["type"] for event in events] == [
-        "run_started",
         "turn_started",
         "model_response_complete",
         "tool_call",
@@ -363,15 +361,13 @@ def test_react_loop_preserves_stream_event_order(tmp_path, monkeypatch):
         "model_response_complete",
         "turn_complete",
         "done",
-        "run_finished",
     ]
-    assert events[3]["name"] == "read_file"
+    assert events[2]["name"] == "read_file"
+    assert events[2]["tool_call_id"] == "call_1"
+    assert "1: hello" in events[3]["result"]
     assert events[3]["tool_call_id"] == "call_1"
-    assert "1: hello" in events[4]["result"]
-    assert events[4]["tool_call_id"] == "call_1"
     done = next(event for event in events if event["type"] == "done")
     assert done["total_turns"] == 2
-    assert events[0]["run_id"] == events[-1]["run_id"]
 
 
 def test_load_skill_is_injected_in_the_same_query_next_model_turn(tmp_path, monkeypatch):
@@ -412,8 +408,6 @@ def test_runtime_integrates_context_compression_and_detailed_usage(tmp_path, mon
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.llm.max_tokens = 100
-    config.memory.compression_reserve_tokens = 20
-    config.memory.compression_threshold = 0.6
     client = UsageAndCompressionClient()
     agent = Agent(
         llm_client=client,
@@ -464,7 +458,6 @@ def test_react_runtime_keeps_one_model_call_and_vela_stream_events(tmp_path, mon
 
     assert client.calls == 1
     assert [event["type"] for event in events] == [
-        "run_started",
         "turn_started",
         "thinking_delta",
         "text_delta",
@@ -472,7 +465,6 @@ def test_react_runtime_keeps_one_model_call_and_vela_stream_events(tmp_path, mon
         "model_response_complete",
         "turn_complete",
         "done",
-        "run_finished",
     ]
     done = next(event for event in events if event["type"] == "done")
     assert done["total_turns"] == 1
@@ -488,13 +480,14 @@ def test_direct_react_runtime_returns_complete_transcript(tmp_path, monkeypatch)
     async def run():
         events = []
         async for event in run_react_agent(
-            llm_client=SingleTurnStreamingClient(),
-            tool_registry=ToolRegistry(),
-            system_prompt="test",
-            user_message="hello",
-            history=None,
-            cwd=str(tmp_path),
-            config=config,
+            "hello",
+            None,
+            ReactRuntime(
+                llm_client=SingleTurnStreamingClient(),
+                tool_registry=ToolRegistry(),
+                system_prompt="test",
+                tool_context=ToolContext(cwd=str(tmp_path), config=config),
+            ),
         ):
             events.append(event)
         return events
@@ -510,8 +503,7 @@ def test_react_runtime_preserves_parallel_reads_and_serial_write(tmp_path, monke
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.features.context_compression = False
-    config.policy.hitl_mode = "never"
-    config.features.audit_log = False
+    config.policy.approval_mode = "auto"
     both_reads_started = asyncio.Event()
     release_reads = asyncio.Event()
     order: list[str] = []
@@ -595,7 +587,6 @@ def test_closing_after_first_tool_result_cancels_pending_concurrent_tool(tmp_pat
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.features.context_compression = False
-    config.features.audit_log = False
     slow_started = asyncio.Event()
     slow_cancelled = asyncio.Event()
 
@@ -650,7 +641,7 @@ def test_react_runtime_forwards_hitl_approval(
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.features.context_compression = False
-    config.policy.hitl_mode = "always"
+    config.policy.approval_mode = "ask"
     approvals = []
     executions = 0
 
@@ -695,42 +686,6 @@ def test_react_runtime_forwards_hitl_approval(
             "description": "write",
         }
     ]
-
-
-def test_mutating_tool_audit_is_correlated_with_agent_run(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
-    config.llm.api_key = "test-key"
-    config.features.context_compression = False
-    config.policy.hitl_mode = "never"
-    config.policy.audit_log_path = str(tmp_path / "audit.jsonl")
-
-    async def write(_payload, _context):
-        return ToolResult("written")
-
-    registry = ToolRegistry()
-    registry.register(
-        Tool(
-            name="write",
-            description="write",
-            parameters=object_schema({}),
-            handler=write,
-            is_read_only=False,
-        )
-    )
-    agent = Agent(
-        llm_client=ToolResultClient("write", expected_result="written"),
-        tool_registry=registry,
-        config=config,
-        cwd=str(tmp_path),
-    )
-
-    events = asyncio.run(_collect(agent.run("write once")))
-    audit = json.loads((tmp_path / "audit.jsonl").read_text(encoding="utf-8"))
-
-    assert audit["run_id"] == events[0]["run_id"]
-    assert audit["tool_name"] == "write"
-    assert audit["outcome"] == "allow"
 
 
 def test_unknown_tool_with_malformed_input_returns_error_and_model_recovers(tmp_path, monkeypatch):
@@ -785,7 +740,7 @@ def test_ambiguous_unindexed_tool_fragment_fails_before_writes(tmp_path, monkeyp
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.features.context_compression = False
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
     executions = []
 
     async def write(payload, context):  # noqa: ARG001
@@ -821,7 +776,7 @@ def test_duplicate_id_repeat_fails_before_extra_write(tmp_path, monkeypatch):
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.features.context_compression = False
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
     executions = []
 
     async def write(payload, context):  # noqa: ARG001
@@ -873,7 +828,7 @@ def test_completed_tool_result_is_persisted_before_event_delivery(tmp_path, monk
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.features.context_compression = False
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
 
     async def write(payload, context):  # noqa: ARG001
         return ToolResult("written")
@@ -914,7 +869,7 @@ def test_duplicate_tool_call_ids_do_not_deadlock_serial_execution(tmp_path, monk
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.features.context_compression = False
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
     order: list[str] = []
 
     registry = ToolRegistry()
@@ -952,7 +907,7 @@ def test_react_loop_fails_explicitly_at_the_model_turn_limit(tmp_path, monkeypat
     config = load_config(project_root=tmp_path)
     config.llm.api_key = "test-key"
     config.features.context_compression = False
-    config.policy.hitl_mode = "never"
+    config.policy.approval_mode = "auto"
     calls: list[str] = []
 
     async def write(payload, context):  # noqa: ARG001

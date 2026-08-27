@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -11,7 +12,6 @@ from rich.console import Console
 from vela.agent import Agent, LangGraphPlanAgent
 from vela.events import AgentEvent
 from vela.render import RichRenderer
-from vela.run_trace import trace_finished_event
 from vela.session import ActiveSession
 from vela.session_history import finalize_interrupted_history
 from vela.task_control import InteractiveTaskController, TaskState
@@ -54,23 +54,59 @@ async def run_events(
     context_window: int | None = None,
     task_controller: InteractiveTaskController | None = None,
 ) -> None:
-    """Render one event stream and raise its first runtime error after Trace completion."""
+    """Render one event stream, print a small ephemeral summary, then raise errors."""
     renderer.set_context_window(context_window)
     renderer.start_run()
     renderer.newline()
+    started_at = monotonic()
     pending_error: BaseException | None = None
-    async for event in events:
-        event_type = event.get("type")
-        if pending_error is None or event_type == "run_finished":
+    completed = False
+    turns = 0
+    tool_calls = 0
+    total_tokens = 0
+    try:
+        async for event in events:
+            event_type = event.get("type")
             renderer.handle(event)
-        if task_controller is not None and event_type == "plan_status":
-            task_controller.set_phase(str(event.get("phase") or ""))
-        if event_type == "error" and pending_error is None:
-            error = event.get("error")
-            pending_error = error if isinstance(error, BaseException) else RuntimeError(str(error))
+            if task_controller is not None and event_type == "plan_status":
+                task_controller.set_phase(str(event.get("phase") or ""))
+            if event_type == "turn_started":
+                turns = max(turns, int(event.get("turn") or 0))
+            elif event_type == "tool_call":
+                tool_calls += 1
+            elif event_type == "done":
+                completed = True
+                turns = max(turns, int(event.get("total_turns") or 0))
+                total_tokens = int(event.get("total_tokens") or 0)
+            elif event_type == "error" and pending_error is None:
+                error = event.get("error")
+                pending_error = (
+                    error if isinstance(error, BaseException) else RuntimeError(str(error))
+                )
+    except asyncio.CancelledError:
+        renderer.print_run_summary(
+            status="cancelled",
+            duration_ms=int((monotonic() - started_at) * 1_000),
+            turns=turns,
+            tool_calls=tool_calls,
+            total_tokens=total_tokens,
+        )
+        renderer.newline()
+        raise
+
+    status = "completed" if completed and pending_error is None else "failed"
+    renderer.print_run_summary(
+        status=status,
+        duration_ms=int((monotonic() - started_at) * 1_000),
+        turns=turns,
+        tool_calls=tool_calls,
+        total_tokens=total_tokens,
+    )
     renderer.newline()
     if pending_error is not None:
         raise pending_error
+    if not completed:
+        raise RuntimeError("Agent stream ended before completion.")
 
 
 def start_plan(arg: str, runtime: ReplRuntime) -> None:
@@ -109,13 +145,10 @@ async def run_delegated_with_session(
     console: Console,
     task_controller: InteractiveTaskController | None = None,
 ) -> None:
-    """Run a Plan agent while keeping the facade Agent history and Trace in sync."""
+    """Run a Plan agent while keeping the facade Agent history in sync."""
     previous_history = list(agent.history)
     agent.history = [*previous_history, Message(role="user", content=message)]
     events: AsyncIterable[AgentEvent] = delegated_agent.run(message)
-    track_events = getattr(agent, "track_events", None)
-    if callable(track_events):
-        events = track_events(events, mode="plan")
     run_renderer = RichRenderer()
     try:
         await run_events(
@@ -142,18 +175,8 @@ async def run_delegated_with_session(
 
 
 def _finalize_cancelled(agent: Agent, renderer: RichRenderer) -> None:
-    """Close the cancelled transcript and render its Trace summary if one exists."""
+    """Close the cancelled transcript after the ephemeral summary was rendered."""
     agent.history = finalize_interrupted_history(agent.history, status="cancelled")
-    trace = getattr(agent, "last_run_trace", None)
-    if trace is None:
-        return
-    renderer.handle(
-        trace_finished_event(
-            trace,
-            warning=getattr(agent, "last_run_trace_warning", None),
-        )
-    )
-    renderer.newline()
 
 
 def _finalize_failed(agent: Agent, error: BaseException) -> None:

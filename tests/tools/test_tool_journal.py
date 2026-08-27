@@ -15,8 +15,7 @@ from vela.tools.journal import ToolExecutionJournal, execution_identity
 
 def _config(tmp_path):
     config = load_config(project_root=tmp_path)
-    config.policy.hitl_mode = "never"
-    config.features.audit_log = False
+    config.policy.approval_mode = "auto"
     config.tools.execution_journal_path = str(tmp_path / "state" / "tool-executions.sqlite")
     return config
 

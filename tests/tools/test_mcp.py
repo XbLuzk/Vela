@@ -51,7 +51,7 @@ if __name__ == "__main__":
         names = [tool.name for tool in tools]
         tool = next(item for item in tools if item.name == "mcp__fake__echo")
         config = load_config(project_root=tmp_path)
-        config.policy.hitl_mode = "never"
+        config.policy.approval_mode = "auto"
         result = await tool.execute({"text": "ok"}, ToolContext(cwd=str(tmp_path), config=config))
         return names, result
 

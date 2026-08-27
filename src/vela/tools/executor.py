@@ -5,7 +5,6 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
-from vela.policy import AuditLog
 from vela.tools.base import Tool, ToolContext, ToolDecision, ToolResult
 from vela.tools.calls import tool_call_arguments, tool_call_name
 from vela.tools.journal import ToolExecutionJournal, execution_identity
@@ -99,8 +98,6 @@ class ToolExecutor:
                 is_error=True,
             )
 
-        audit = AuditLog(context.config.policy.audit_log_path)
-        approver = "none"
         mutation: _MutationExecution | None = None
         execution_claimed = False
         try:
@@ -115,11 +112,10 @@ class ToolExecutor:
             if recovered is not None:
                 return recovered
 
-            approver, denied = await self._authorize(
+            denied = await self._authorize(
                 tool,
                 data,
                 context,
-                audit,
                 tool_call_id,
             )
             if denied is not None:
@@ -137,25 +133,8 @@ class ToolExecutor:
                     return blocked
                 execution_claimed = True
 
-            result = await self._run_tool(tool, data, context, tool_call_id, mutation)
-            if not tool.is_read_only and context.config.features.audit_log:
-                audit.record(
-                    tool_name=tool.name,
-                    input_data=data,
-                    outcome="allow" if not result.is_error else "error",
-                    approver=approver,
-                    cwd=context.cwd,
-                )
-            return result
+            return await self._run_tool(tool, data, context, tool_call_id, mutation)
         except Exception as exc:  # noqa: BLE001 - tool errors must flow back to the model
-            if context.config.features.audit_log and not tool.is_read_only:
-                audit.record(
-                    tool_name=tool.name,
-                    input_data=payload,
-                    outcome="error",
-                    approver=approver,
-                    cwd=context.cwd,
-                )
             result = ToolResult(
                 tool_use_id=tool_call_id,
                 content=f'Tool "{name}" execution error: {exc}',
@@ -265,22 +244,13 @@ class ToolExecutor:
         tool: Tool,
         payload: dict[str, Any],
         context: ToolContext,
-        audit: AuditLog,
         tool_call_id: str,
-    ) -> tuple[str, ToolResult | None]:
+    ) -> ToolResult | None:
         decision = await self._approval_decision(tool, payload, context)
         if decision not in {"deny", "skip"}:
-            uses_hitl = tool.requires_approval or context.config.policy.hitl_mode == "always"
-            return ("hitl" if uses_hitl else "none"), None
+            return None
 
-        audit.record(
-            tool_name=tool.name,
-            input_data=payload,
-            outcome=decision,
-            approver="hitl",
-            cwd=context.cwd,
-        )
-        return "hitl", ToolResult(
+        return ToolResult(
             tool_use_id=tool_call_id,
             content=f'Tool "{tool.name}" was {decision}ed by approval policy.',
             is_error=True,
@@ -292,10 +262,10 @@ class ToolExecutor:
         payload: dict[str, Any],
         context: ToolContext,
     ) -> ToolDecision:
-        mode = context.config.policy.hitl_mode
-        if mode == "never":
+        mode = context.config.policy.approval_mode
+        if mode == "auto":
             return "approve"
-        if mode == "auto" and not tool.requires_approval:
+        if not tool.requires_approval:
             return "approve"
         if not context.approval_callback:
             return "deny"

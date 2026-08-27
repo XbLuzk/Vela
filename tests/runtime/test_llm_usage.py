@@ -116,13 +116,10 @@ def test_agent_propagates_connection_error_without_raising(tmp_path, monkeypatch
     events = asyncio.run(_collect_agent_events(agent))
 
     assert [event["type"] for event in events] == [
-        "run_started",
         "turn_started",
         "error",
-        "run_finished",
     ]
-    assert "Could not connect to deepseek" in str(events[2]["error"])
-    assert events[-1]["status"] == "failed"
+    assert "Could not connect to deepseek" in str(events[1]["error"])
 
 
 def test_usage_only_chunk_without_choices_is_parsed() -> None:

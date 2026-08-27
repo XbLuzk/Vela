@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 from typer.testing import CliRunner
 
 from vela.entrypoints import cli
 from vela.prompt import PromptAssembler
-from vela.run_trace import RunTrace, RunTraceStore
+from vela.tools import ToolRegistry
 from vela.trust import ProjectTrustStore
-from vela.types import Usage
+from vela.types import QueryResult, Usage
 
 
 def test_resume_flag_starts_interactive_repl_in_resume_mode(tmp_path, monkeypatch):
@@ -45,66 +46,6 @@ def test_team_mode_is_rejected(tmp_path):
 
     assert result.exit_code != 0
     assert "mode must be react or plan" in result.output
-
-
-def test_trace_command_lists_and_inspects_persisted_runs(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    store = RunTraceStore()
-    store.append(
-        RunTrace(
-            run_id="run_123456789abc",
-            status="completed",
-            mode="react",
-            model="fake-model",
-            provider="fake-provider",
-            cwd=str(tmp_path),
-            session_id="session_1",
-            started_at="2026-08-14T00:00:00+00:00",
-            finished_at="2026-08-14T00:00:01+00:00",
-            duration_ms=1_000,
-            turns=2,
-            usage=Usage(input_tokens=20, output_tokens=10),
-            tool_calls=1,
-        )
-    )
-
-    listed = CliRunner().invoke(cli.app, ["trace"])
-    inspected = CliRunner().invoke(cli.app, ["trace", "123456789abc", "--json"])
-
-    assert listed.exit_code == 0
-    assert "123456789abc" in listed.output
-    assert "completed" in listed.output
-    assert inspected.exit_code == 0
-    assert '"tool_calls": 1' in inspected.output
-
-    inspected = CliRunner().invoke(cli.app, ["trace", "run_1234", "--json"])
-    assert inspected.exit_code == 0
-
-
-def test_trace_json_keeps_warning_on_stderr(tmp_path, monkeypatch):
-    class UnreadableStore(RunTraceStore):
-        def list(self, *, limit=20):  # noqa: ARG002
-            self.last_warning = "Run traces could not be read: denied"
-            return []
-
-    store = UnreadableStore(tmp_path / "runs.jsonl")
-    monkeypatch.setattr(cli, "RunTraceStore", lambda: store)
-
-    result = CliRunner().invoke(cli.app, ["trace", "--json"])
-
-    assert result.exit_code == 1
-    assert json.loads(result.stdout) == []
-    assert "could not be read" in result.stderr
-
-
-def test_trace_json_not_found_keeps_machine_readable_stdout(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-
-    result = CliRunner().invoke(cli.app, ["trace", "missing", "--json"])
-
-    assert result.exit_code == 1
-    assert json.loads(result.stdout) is None
-    assert "not found" in result.stderr
 
 
 def test_noninteractive_project_resources_are_ignored_until_explicitly_trusted(
@@ -163,3 +104,38 @@ def test_saved_trust_denial_is_respected_for_plain_project(tmp_path, monkeypatch
 
     assert result.exit_code == 0
     assert seen == [False]
+
+
+def test_single_prompt_json_uses_ephemeral_status_without_run_id(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = cli.load_config(project_root=tmp_path, env={"VELA_API_KEY": "test"})
+
+    async def fake_registry(**kwargs):  # noqa: ARG001
+        return ToolRegistry(), None
+
+    class FakeAgent:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        async def run_complete(self, prompt):  # noqa: ARG002
+            return QueryResult(
+                text="answer",
+                total_tokens=12,
+                turns=1,
+                usage=Usage(input_tokens=10, output_tokens=2, total_tokens=12),
+            )
+
+    monkeypatch.setattr(cli, "build_tool_registry", fake_registry)
+    monkeypatch.setattr(cli, "create_llm_client", lambda config: object())
+    monkeypatch.setattr(cli, "Agent", FakeAgent)
+
+    asyncio.run(cli._run_prompt("hello", str(tmp_path), config, json_output=True))
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "completed"
+    assert payload["text"] == "answer"
+    assert "run_id" not in payload
