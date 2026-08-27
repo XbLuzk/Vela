@@ -99,16 +99,16 @@ uv run vela --mode plan -p "先读取 README，再验证项目" --json
 Vela 的配置加载按四个阶段进行，后面的值覆盖前面的值：
 
 1. 内置默认配置
-2. 配置文件：`~/.vela/config.json` → 受信任项目的 `.vela/config.json`
-3. 本次运行：受信任项目的 `.env` → CLI 参数
-4. 当前进程环境变量
+2. 用户配置：`~/.vela/config.json`
+3. 当前进程环境变量
+4. CLI 参数
 
-实现上也只对应 `load files → apply runtime overrides → build config` 三步。配置文件负责稳定设置，
-环境变量适合密钥和临时覆盖，CLI 参数适合单次运行。
+实现上就是一条顺序管线：读取用户配置、应用环境变量、应用 CLI 参数、校验结果。项目目录中的
+`.env` 和 `.vela/config.json` 不会被自动读取；配置文件负责稳定设置，环境变量适合密钥和临时覆盖，
+CLI 参数拥有最高优先级，适合单次运行。
 
-项目存在 `.env`、`.vela/config.json`、`.vela/mcp.json`、默认项目指令文件（如 `AGENTS.md`）或项目级
-Skill 时，Vela 首次交互启动会先询问是否信任。未信任项目不会加载这些可改变模型、工具、凭证或
-系统指令的资源；单次模式默认拒绝，可以用
+项目存在 `.vela/mcp.json`、默认项目指令文件（如 `AGENTS.md`）或项目级 Skill 时，Vela 首次交互
+启动会先询问是否信任。未信任项目不会加载这些可改变工具或系统指令的资源；单次模式默认拒绝，可以用
 `--trust-project` 仅授权本次运行。交互中使用 `/trust` 或 `/trust deny` 保存决定，重启后生效。
 
 常用环境变量：
@@ -196,13 +196,12 @@ Shell 工具。`Ctrl+C` 永远不会退出 Vela；空闲时它只会清空草稿
 /clear
 /cancel
 /session [list|current|resume <session-id-or-index>]
-/context
-/memory
+/memory [list]
+/memory save <fact>
 /memory search <query>
 /memory stats
 /memory delete <id>
 /memory clear
-/save <fact>
 /status [config|policy|tools|usage|mcp]
 /hitl ask|auto
 /plan <task>
@@ -223,7 +222,7 @@ Vela 内置的主要工具：
 
 | 类别 | 工具 |
 | --- | --- |
-| 文件 | `read_file`、`write_file`、`list_dir`、`glob` |
+| 文件 | `read_file`、`write_file`、`edit_file`、`list_dir` |
 | 搜索 | `grep` |
 | 命令 | `bash` |
 | 记忆 | `save_memory`、`search_memory` |
@@ -232,7 +231,7 @@ Vela 内置的主要工具：
 联网与浏览器能力统一由 MCP Server 提供，Vela 不再维护一套重复的本地 Web 实现。
 
 写文件、执行命令和远程 MCP 写操作等危险动作会经过 Policy 与 HITL 处理。
-项目级配置、MCP 和 Skill 还必须先通过项目 Trust；用户级资源不受项目 Trust 影响。
+项目级指令、MCP 和 Skill 还必须先通过项目 Trust；用户级资源不受项目 Trust 影响。
 
 交互模式下按 `Shift+Tab` 切换审批模式：
 

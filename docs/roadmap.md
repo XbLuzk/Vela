@@ -20,7 +20,7 @@ Vela ReAct 循环，复杂任务使用可恢复的 LangGraph Plan DAG，并通�
 - [x] 内置自动管理的 Code RAG，通过 MCP 隔离增量索引且不增加核心 Agent 依赖。
 - [x] 建立有界 Context Engine，统一工具结果裁剪和结构化历史摘要。
 - [x] 在 Provider 上下文超限后压缩旧轮次并安全重试一次。
-- [x] 为项目级配置、MCP、`.env` 和 Skills 建立持久化 Trust 边界。
+- [x] 为项目级指令、MCP 和 Skills 建立持久化 Trust 边界。
 - [ ] 自动化交互式取消与中断 Plan 恢复的 PTY Live 验收。
 - [ ] 增加 MCP Server 状态、重启、日志和运行时启停命令。
 - [ ] 支持在普通输入中直接引用 MCP Resource 和 Prompt。

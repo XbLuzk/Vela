@@ -24,7 +24,7 @@ stdio MCP 子进程。项目 Trust、运行中消息拒绝、上下文溢出恢�
 
 ## 3. Live E2E
 
-Live 测试通过真实 OpenAI-compatible 模型运行完整 CLI，并按开关验证 MCP、Chrome 和 Plan。
+Live 测试通过真实 OpenAI-compatible 模型运行完整 CLI，并验证 MCP；Chrome 和 Plan 可按需启用。
 它们默认跳过，只能显式执行：
 
 ```bash

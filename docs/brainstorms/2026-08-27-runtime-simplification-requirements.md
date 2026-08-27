@@ -35,7 +35,7 @@ must be discoverable on demand rather than shape the first-use path.
   `/mcp` with `/status [config|policy|tools|usage|mcp]`; bare `/status` shows the compact summary.
   Operational MCP APIs and CLI subcommands remain unchanged. Status output uses field allowlists
   and never prints credentials or raw configuration object representations. Removed display
-  commands return a one-line migration hint but stay out of help and completion. Unknown sections
+  commands are removed from routing, help, and completion. Unknown sections
   list the valid choices; unavailable integrations show `unavailable` instead of looking like zero
   resources or aborting the REPL.
 - R5. Replace `/sessions` and `/resume` with `/session [list|current|resume <id|position>]`; bare
@@ -57,12 +57,11 @@ must be discoverable on demand rather than shape the first-use path.
 - R8. Simplify HITL to `ask` and `auto` approval modes. `ask` automatically runs safe tools and
   prompts for tools marked as requiring approval; `auto` skips tool approval prompts. PathGuard and
   CommandGuard remain enabled and cannot be bypassed in either mode. LangGraph plan review remains
-  a separate `execute / modify / cancel` decision. Fresh installs default to `ask`; legacy
-  `always` and `auto` map to `ask`, while legacy `never` maps to `auto`, avoiding a silent permission
-  broadening for existing configurations.
+  a separate `execute / modify / cancel` decision. Fresh installs default to `ask`; removed HITL
+  modes and environment variables are not accepted.
 - R9. Keep only `max_conversation_history` as public Context configuration; compression threshold,
-  target, reserve, recent-message count, and summary size become named internal defaults. Legacy
-  keys are ignored with one migration warning. Compression follows one readable bounded flow: trim
+  target, reserve, recent-message count, and summary size become named internal defaults. Unknown
+  keys use the normal config warning. Compression follows one readable bounded flow: trim
   oversized tool results, preserve recent messages, compress older history, and retry a provider
   context-overflow failure at most once.
 - R10. Keep ordinary ReAct independent from Plan recovery details. LangGraph-only execution scope,

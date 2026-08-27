@@ -57,12 +57,12 @@
 
 ## 4. 最后补持久化和终端 UI
 
-- `src/vela/config.py::load_config`：只串联“加载配置文件 → 应用本次覆盖 → 校验并构建”三步；
-  各 Provider 环境变量、Feature 开关和审批模式分别由独立小函数处理。
+- `src/vela/config.py::load_config`：按“默认值 → 用户配置 → 环境变量 → CLI 参数”构建唯一配置；
+  Provider 元数据集中在 `src/vela/providers.py`，审批模式由一个独立小函数处理。
 - `src/vela/session.py`：保存和恢复对话消息。
 - `src/vela/tools/journal.py`：记录有副作用的工具调用，恢复时避免重复执行已完成操作。
 - `src/vela/task_control.py`：管理 planning、running、cancelled 等前台任务状态。
-- `src/vela/entrypoints/repl_commands.py`：实现配置、上下文、Memory、Skill 等斜杠命令。
+- `src/vela/entrypoints/repl_commands.py`：实现 Status、Memory、Skill 等斜杠命令。
 - `src/vela/entrypoints/repl_tasks.py`：运行 ReAct / Plan，并确保取消或失败后仍保存 Session。
 - `src/vela/entrypoints/repl_ui.py`：输入框、快捷键和底部状态栏；它不参与 Agent 决策。
 - `src/vela/render/rich_renderer.py`：把 Agent 事件显示到终端。
