@@ -1,4 +1,4 @@
-"""Persistent trust decisions for project-local executable configuration."""
+"""Persistent trust decisions for project-local instructions and extensions."""
 
 from __future__ import annotations
 
@@ -14,11 +14,7 @@ from vela.storage import (
     write_private_text,
 )
 
-_TRUST_SENSITIVE_FILES = (
-    Path(".env"),
-    Path(".vela/config.json"),
-    Path(".vela/mcp.json"),
-)
+_TRUST_SENSITIVE_FILES = (Path(".vela/mcp.json"),)
 DEFAULT_PROJECT_INSTRUCTION_PATHS = (
     Path("AGENTS.md"),
     Path(".vela/AGENTS.md"),
@@ -89,7 +85,7 @@ def resolve_project_trust(
 
 
 def has_trust_sensitive_resources(project_root: str | Path) -> bool:
-    """Return whether this project can change Vela configuration or capabilities."""
+    """Return whether this project can add instructions, tools, or skills."""
     root = Path(project_root).expanduser().resolve()
     sensitive_files = _TRUST_SENSITIVE_FILES + DEFAULT_PROJECT_INSTRUCTION_PATHS
     if any((root / relative).is_file() for relative in sensitive_files):

@@ -4,6 +4,8 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from vela.providers import model_context_window, provider_api_key_envs, provider_spec
+
 
 @dataclass(frozen=True, slots=True)
 class ModelProfile:
@@ -22,7 +24,7 @@ class ModelProfile:
         env: Mapping[str, str] | None = None,
     ) -> str:
         env_map = env if env is not None else os.environ
-        candidates = (*PROVIDER_API_KEY_ENVS.get(self.provider, ()), "VELA_API_KEY")
+        candidates = (*provider_api_key_envs(self.provider), "VELA_API_KEY")
         for key in candidates:
             if key and env_map.get(key):
                 return str(env_map[key])
@@ -31,54 +33,54 @@ class ModelProfile:
         return ""
 
 
+def _profile(
+    name: str,
+    provider: str,
+    model: str,
+    description: str,
+) -> ModelProfile:
+    spec = provider_spec(provider)
+    if spec is None:
+        raise ValueError(f"Missing provider metadata for {provider}")
+    return ModelProfile(
+        name=name,
+        provider=provider,
+        model=model,
+        base_url=spec.base_url,
+        context_window=model_context_window(model, spec.context_window),
+        description=description,
+    )
+
+
 DEFAULT_MODEL_PROFILES: tuple[ModelProfile, ...] = (
-    ModelProfile(
+    _profile(
         name="DeepSeek V4 Flash",
         provider="deepseek",
         model="deepseek-v4-flash",
-        base_url="https://api.deepseek.com",
-        context_window=1_000_000,
         description="Fast, cost-efficient Agent model with thinking support",
     ),
-    ModelProfile(
+    _profile(
         name="DeepSeek V4 Pro",
         provider="deepseek",
         model="deepseek-v4-pro",
-        base_url="https://api.deepseek.com",
-        context_window=1_000_000,
         description="Higher-quality DeepSeek model for difficult coding tasks",
     ),
-    ModelProfile(
+    _profile(
         name="GLM-5.2",
         provider="glm",
         model="glm-5.2",
-        base_url="https://open.bigmodel.cn/api/paas/v4",
-        context_window=200_000,
         description="Zhipu flagship model for long-running Agent tasks",
     ),
-    ModelProfile(
+    _profile(
         name="GLM-5.1",
         provider="glm",
         model="glm-5.1",
-        base_url="https://open.bigmodel.cn/api/paas/v4",
-        context_window=200_000,
         description="Zhipu general-purpose coding and reasoning model",
     ),
-    ModelProfile(
+    _profile(
         name="GLM-4.7",
         provider="glm",
         model="glm-4.7",
-        base_url="https://open.bigmodel.cn/api/paas/v4",
-        context_window=200_000,
         description="Agentic coding model with tool calling",
     ),
 )
-
-
-PROVIDER_API_KEY_ENVS: dict[str, tuple[str, ...]] = {
-    "deepseek": ("DEEPSEEK_API_KEY",),
-    "glm": ("ZAI_API_KEY", "GLM_API_KEY"),
-    "zhipu": ("ZAI_API_KEY", "GLM_API_KEY"),
-    "openai": ("OPENAI_API_KEY",),
-    "openai-compatible": ("OPENAI_API_KEY",),
-}

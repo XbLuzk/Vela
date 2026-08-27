@@ -215,6 +215,17 @@ class CodeIndex:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
+            columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(files)")}
+            required = {"path", "digest", "size", "mtime_ns", "ctime_ns", "retrieval_identity"}
+            if columns and not required.issubset(columns):
+                connection.executescript(
+                    """
+                    DROP TABLE IF EXISTS chunks_fts;
+                    DROP INDEX IF EXISTS chunks_path_idx;
+                    DROP TABLE IF EXISTS chunks;
+                    DROP TABLE IF EXISTS files;
+                    """
+                )
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS files (
@@ -244,28 +255,6 @@ class CodeIndex:
                 );
                 """
             )
-            columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(files)")}
-            if {"size", "mtime_ns", "ctime_ns", "retrieval_identity"} - columns:
-                connection.execute("BEGIN IMMEDIATE")
-                columns = {
-                    str(row["name"]) for row in connection.execute("PRAGMA table_info(files)")
-                }
-                if "size" not in columns:
-                    connection.execute(
-                        "ALTER TABLE files ADD COLUMN size INTEGER NOT NULL DEFAULT -1"
-                    )
-                if "mtime_ns" not in columns:
-                    connection.execute(
-                        "ALTER TABLE files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT -1"
-                    )
-                if "ctime_ns" not in columns:
-                    connection.execute(
-                        "ALTER TABLE files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT -1"
-                    )
-                if "retrieval_identity" not in columns:
-                    connection.execute(
-                        "ALTER TABLE files ADD COLUMN retrieval_identity TEXT NOT NULL DEFAULT ''"
-                    )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database)

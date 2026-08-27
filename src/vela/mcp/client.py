@@ -204,7 +204,7 @@ class McpClientManager:
 
     @asynccontextmanager
     async def _session(self, spec: McpServerSpec):
-        if spec.type in {"stdio", "local"}:
+        if spec.type == "stdio":
             if not spec.command:
                 raise ValueError(f"MCP server {spec.name} is missing command")
             params = StdioServerParameters(
@@ -221,7 +221,7 @@ class McpClientManager:
                     await session.initialize()
                     yield session
             return
-        if spec.type in {"http", "streamable_http", "streamable-http"}:
+        if spec.type == "streamable_http":
             if not spec.url:
                 raise ValueError(f"MCP server {spec.name} is missing url")
             async with (
@@ -235,7 +235,7 @@ class McpClientManager:
                 await session.initialize()
                 yield session
             return
-        raise ValueError(f"Unsupported MCP transport: {spec.type}")
+        raise ValueError(f"Unsupported MCP type: {spec.type}")
 
 
 def _content_to_text(content: Any) -> str:

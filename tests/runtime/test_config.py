@@ -24,12 +24,11 @@ def test_config_precedence(tmp_path, monkeypatch):
     monkeypatch.setenv("VELA_MODEL", "process-model")
 
     config = load_config(
-        project_root=project,
         overrides={"llm": {"model": "cli-model"}},
     )
 
     assert config.llm.provider == "process"
-    assert config.llm.model == "process-model"
+    assert config.llm.model == "cli-model"
 
 
 def test_provider_specific_api_key(tmp_path, monkeypatch):
@@ -38,12 +37,12 @@ def test_provider_specific_api_key(tmp_path, monkeypatch):
     monkeypatch.delenv("VELA_API_KEY", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
 
-    config = load_config(project_root=tmp_path)
+    config = load_config()
 
     assert config.llm.api_key == "deepseek-key"
 
 
-def test_untrusted_config_ignores_project_json_and_dotenv(tmp_path, monkeypatch):
+def test_project_json_and_dotenv_are_never_configuration_sources(tmp_path, monkeypatch):
     home = tmp_path / "home"
     project = tmp_path / "project"
     (home / ".vela").mkdir(parents=True)
@@ -59,7 +58,7 @@ def test_untrusted_config_ignores_project_json_and_dotenv(tmp_path, monkeypatch)
     (project / ".env").write_text("VELA_MODEL=dotenv-model\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
 
-    config = load_config(project_root=project, include_project=False)
+    config = load_config(project_trusted=False, env={})
 
     assert config.llm.model == "user-model"
     assert not config.project_trusted
@@ -67,6 +66,6 @@ def test_untrusted_config_ignores_project_json_and_dotenv(tmp_path, monkeypatch)
 
 def test_runtime_project_trust_is_not_exposed_as_persisted_config(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path, include_project=False)
+    config = load_config(project_trusted=False)
 
     assert "project_trusted" not in config_to_public_dict(config)

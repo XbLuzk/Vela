@@ -145,7 +145,6 @@ async def _stream_react_turn(
         context_engine=runtime.context_engine,
         system_prompt=runtime.system_prompt,
         tool_definitions=runtime.tool_definitions,
-        enabled=runtime.config.features.context_compression,
     )
     if compression_event is not None:
         yield compression_event
@@ -217,11 +216,7 @@ async def _stream_model_with_overflow_recovery(
             return
 
         error = turn.error or RuntimeError("Model request failed")
-        if not (
-            isinstance(error, ContextOverflowError)
-            and runtime.config.features.context_compression
-            and not overflow_retried
-        ):
+        if not (isinstance(error, ContextOverflowError) and not overflow_retried):
             yield {"type": "error", "error": error}
             return
         try:
@@ -313,10 +308,7 @@ def _compress_context(
     context_engine: ContextEngine,
     system_prompt: str,
     tool_definitions: list[dict[str, Any]],
-    enabled: bool,
 ) -> AgentEvent | None:
-    if not enabled:
-        return None
     compression = context_engine.prepare(
         transcript,
         system_prompt=system_prompt,
@@ -394,8 +386,6 @@ def _drain_skill_context(skill_context_buffer: SkillContextBuffer | None) -> str
 
 
 def _prepend_skill_candidates(user_message: str, cwd: str, config: VelaConfig) -> str:
-    if not config.features.skill:
-        return user_message
     candidates = SkillRegistry(cwd, include_project=config.project_trusted).match(
         user_message,
         top_k=5,

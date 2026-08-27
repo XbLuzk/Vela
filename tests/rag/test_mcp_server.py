@@ -41,7 +41,7 @@ def test_code_rag_runs_through_the_real_stdio_mcp_boundary(tmp_path, monkeypatch
         manager = McpClientManager(tmp_path)
         tools = await manager.load_tools()
         by_name = {tool.name: tool for tool in tools}
-        config = load_config(project_root=tmp_path)
+        config = load_config()
         config.policy.approval_mode = "auto"
         context = ToolContext(cwd=str(tmp_path), config=config)
         searched = await by_name["mcp__code-rag__search_code"].execute(

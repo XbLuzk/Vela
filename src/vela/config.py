@@ -7,7 +7,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-from vela.storage import user_state_path, vela_dir
+from vela.providers import provider_api_key_envs
+from vela.storage import user_state_path
 
 
 @dataclass(slots=True)
@@ -42,8 +43,6 @@ class MemoryConfig:
 @dataclass(slots=True)
 class PolicyConfig:
     approval_mode: str = "ask"
-    path_guard_enabled: bool = True
-    command_guard_enabled: bool = True
     command_blacklist: list[str] = field(
         default_factory=lambda: [
             "sudo",
@@ -63,17 +62,8 @@ class PolicyConfig:
 
 @dataclass(slots=True)
 class PromptConfig:
-    personality: str = "default"
     agent_mode: str = "react"
     custom_prompt_paths: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class FeatureConfig:
-    mcp: bool = True
-    skill: bool = True
-    memory: bool = True
-    context_compression: bool = True
 
 
 @dataclass(slots=True)
@@ -83,7 +73,6 @@ class VelaConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
-    features: FeatureConfig = field(default_factory=FeatureConfig)
     project_trusted: bool = True
 
 
@@ -97,34 +86,15 @@ LLM_ENV_FIELDS: tuple[tuple[str, str, Any], ...] = (
     ("VELA_TEMPERATURE", "temperature", float),
 )
 
-PROVIDER_API_KEYS: dict[str, tuple[str, ...]] = {
-    "deepseek": ("DEEPSEEK_API_KEY",),
-    "glm": ("ZAI_API_KEY", "GLM_API_KEY"),
-    "zhipu": ("ZAI_API_KEY", "GLM_API_KEY"),
-    "step": ("STEP_API_KEY",),
-    "kimi": ("KIMI_API_KEY",),
-    "moonshot": ("KIMI_API_KEY",),
-    "freellmapi": ("FREELLMAPI_API_KEY",),
-    "xfyun": ("XFYUN_API_KEY",),
-    "agnes": ("AGNES_API_KEY",),
-}
-
-FEATURE_ENV_FIELDS: tuple[tuple[str, str], ...] = (
-    ("VELA_MCP", "mcp"),
-    ("VELA_SKILL", "skill"),
-    ("VELA_MEMORY", "memory"),
-)
-
 
 def load_config(
-    project_root: str | Path | None = None,
     overrides: dict[str, Any] | None = None,
     env: dict[str, str | None] | None = None,
     *,
-    include_project: bool = True,
+    project_trusted: bool = True,
     warnings: list[str] | None = None,
 ) -> VelaConfig:
-    """Build the effective configuration from defaults, files, env, and overrides.
+    """Build config in one order: defaults, user file, environment, then CLI.
 
     Unreadable or malformed configuration sources are skipped so a broken file
     cannot make Vela unusable, but every skipped source and every rejected value
@@ -132,75 +102,36 @@ def load_config(
     user with silently ignored settings.
     """
     warning_sink = warnings if warnings is not None else []
-    root = Path(project_root).resolve() if project_root else None
-    data = _load_config_files(root, include_project=include_project, warnings=warning_sink)
-    data = _load_runtime_overrides(
-        data,
-        root=root,
-        include_project=include_project,
-        overrides=overrides,
-        env=env if env is not None else os.environ,
-        warnings=warning_sink,
-    )
-    return _build_config(data, include_project=include_project, warnings=warning_sink)
-
-
-def get_config_paths(
-    project_root: str | Path | None = None,
-    *,
-    include_project: bool = True,
-) -> list[Path]:
-    paths = [user_state_path("config.json")]
-    if project_root and include_project:
-        paths.append(vela_dir(Path(project_root).resolve()) / "config.json")
-    return paths
-
-
-def _load_config_files(
-    root: Path | None,
-    *,
-    include_project: bool,
-    warnings: list[str],
-) -> dict[str, Any]:
-    """Merge default, user, and optional project JSON configuration."""
     data = _config_to_dict(VelaConfig())
-    for path in get_config_paths(root, include_project=include_project):
-        loaded = _read_json(path, warnings)
-        if loaded:
-            data = _deep_merge(data, loaded)
-    return data
+    user_config = _read_json(user_state_path("config.json"), warning_sink)
+    if user_config:
+        data = _deep_merge(data, user_config)
 
-
-def _load_runtime_overrides(
-    data: dict[str, Any],
-    *,
-    root: Path | None,
-    include_project: bool,
-    overrides: dict[str, Any] | None,
-    env: dict[str, str | None],
-    warnings: list[str],
-) -> dict[str, Any]:
-    """Apply project dotenv, CLI values, migration, then process environment."""
-    result = data
-    if root is not None and include_project:
-        dotenv = _read_env(root / ".env", warnings)
-        if dotenv:
-            result = _apply_env(result, dotenv, warnings, source=str(root / ".env"))
+    environment = env if env is not None else os.environ
+    data = _apply_env(data, environment, warning_sink)
     if overrides:
-        result = _deep_merge(result, overrides)
-    result = _migrate_legacy_policy(result, warnings)
-    return _apply_env(result, env, warnings, source="environment")
+        data = _deep_merge(data, overrides)
+    _apply_provider_env(
+        data.setdefault("llm", {}),
+        environment,
+        protected=set((overrides or {}).get("llm", {})),
+    )
+    return _build_config(data, project_trusted=project_trusted, warnings=warning_sink)
+
+
+def get_config_paths() -> list[Path]:
+    return [user_state_path("config.json")]
 
 
 def _build_config(
     data: dict[str, Any],
     *,
-    include_project: bool,
+    project_trusted: bool,
     warnings: list[str],
 ) -> VelaConfig:
     """Validate merged values and normalize paths used by persistent stores."""
     config = _dict_to_config(data, warnings)
-    config.project_trusted = include_project
+    config.project_trusted = project_trusted
     config.memory.long_term_db_path = _expand_home(config.memory.long_term_db_path)
     config.tools.execution_journal_path = _expand_home(config.tools.execution_journal_path)
     return config
@@ -230,45 +161,16 @@ def _read_json(path: Path, warnings: list[str]) -> dict[str, Any] | None:
     return raw
 
 
-def _read_env(path: Path, warnings: list[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    if not path.exists():
-        return result
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError) as exc:
-        warnings.append(f"Ignored env file {path}: {exc}")
-        return result
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if (value.startswith('"') and value.endswith('"')) or (
-            value.startswith("'") and value.endswith("'")
-        ):
-            value = value[1:-1]
-        result[key] = value
-    return result
-
-
 def _apply_env(
     data: dict[str, Any],
     env: dict[str, str | None],
     warnings: list[str],
-    *,
-    source: str,
 ) -> dict[str, Any]:
     result = deepcopy(data)
     llm = result.setdefault("llm", {})
-    features = result.setdefault("features", {})
     policy = result.setdefault("policy", {})
-    _apply_typed_env(llm, env, LLM_ENV_FIELDS, warnings, source=source)
-    _apply_provider_env(llm, env)
-    _apply_feature_env(features, env, warnings, source=source)
-    _apply_approval_env(policy, env, warnings, source=source)
+    _apply_typed_env(llm, env, LLM_ENV_FIELDS, warnings)
+    _apply_approval_env(policy, env, warnings)
     return result
 
 
@@ -277,8 +179,6 @@ def _apply_typed_env(
     env: dict[str, str | None],
     fields_to_apply: tuple[tuple[str, str, Any], ...],
     warnings: list[str],
-    *,
-    source: str,
 ) -> None:
     for env_key, config_key, caster in fields_to_apply:
         raw = env.get(env_key)
@@ -287,88 +187,40 @@ def _apply_typed_env(
         try:
             target[config_key] = caster(raw)
         except (TypeError, ValueError):
-            warnings.append(f"Ignored {env_key}={raw!r} from {source}: expected {caster.__name__}")
+            warnings.append(f"Ignored {env_key}={raw!r}: expected {caster.__name__}")
 
 
-def _apply_provider_env(llm: dict[str, Any], env: dict[str, str | None]) -> None:
+def _apply_provider_env(
+    llm: dict[str, Any],
+    env: dict[str, str | None],
+    *,
+    protected: set[str],
+) -> None:
     provider = str(llm.get("provider") or "").lower()
     if not llm.get("api_key"):
-        for provider_key in PROVIDER_API_KEYS.get(provider, ()):
+        for provider_key in provider_api_key_envs(provider):
             if env.get(provider_key):
                 llm["api_key"] = env[provider_key]
                 break
 
     provider_model_key = f"{provider.upper()}_MODEL" if provider else ""
     provider_base_url_key = f"{provider.upper()}_BASE_URL" if provider else ""
-    if provider_model_key and env.get(provider_model_key):
+    if "model" not in protected and provider_model_key and env.get(provider_model_key):
         llm["model"] = env[provider_model_key]
-    if provider_base_url_key and env.get(provider_base_url_key):
+    if "base_url" not in protected and provider_base_url_key and env.get(provider_base_url_key):
         llm["base_url"] = env[provider_base_url_key]
-
-
-def _apply_feature_env(
-    features: dict[str, Any],
-    env: dict[str, str | None],
-    warnings: list[str],
-    *,
-    source: str,
-) -> None:
-    for env_key, feature_key in FEATURE_ENV_FIELDS:
-        raw = env.get(env_key)
-        if raw == "false":
-            features[feature_key] = False
-        elif raw == "true":
-            features[feature_key] = True
-        elif raw not in (None, ""):
-            warnings.append(f"Ignored {env_key}={raw!r} from {source}: expected true or false")
 
 
 def _apply_approval_env(
     policy: dict[str, Any],
     env: dict[str, str | None],
     warnings: list[str],
-    *,
-    source: str,
 ) -> None:
-    legacy_hitl = env.get("VELA_HITL")
-    if legacy_hitl in {"always", "auto", "never"}:
-        policy["approval_mode"] = _legacy_approval_mode(legacy_hitl)
-        warnings.append(
-            f"Migrated legacy VELA_HITL={legacy_hitl!r} from {source}; "
-            "use VELA_APPROVAL_MODE=ask|auto"
-        )
-    elif legacy_hitl not in (None, ""):
-        warnings.append(
-            f"Ignored VELA_HITL={legacy_hitl!r} from {source}: expected always, auto, or never"
-        )
-
     approval_mode = env.get("VELA_APPROVAL_MODE")
     if approval_mode in {"ask", "auto"}:
         policy["approval_mode"] = approval_mode
     elif approval_mode not in (None, ""):
-        warnings.append(
-            f"Ignored VELA_APPROVAL_MODE={approval_mode!r} from {source}: expected ask or auto"
-        )
-
-
-def _migrate_legacy_policy(data: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
-    """Translate persisted three-state HITL config without broadening permissions."""
-    result = deepcopy(data)
-    policy = result.get("policy")
-    if not isinstance(policy, dict) or "hitl_mode" not in policy:
-        return result
-    legacy = policy.pop("hitl_mode")
-    if legacy in {"always", "auto", "never"}:
-        policy["approval_mode"] = _legacy_approval_mode(str(legacy))
-        warnings.append(
-            "Migrated policy.hitl_mode to policy.approval_mode; "
-            "use ask or auto in future config files"
-        )
-    return result
-
-
-def _legacy_approval_mode(value: str) -> str:
-    return "auto" if value == "never" else "ask"
+        warnings.append(f"Ignored VELA_APPROVAL_MODE={approval_mode!r}: expected ask or auto")
 
 
 def _deep_merge(target: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
@@ -391,13 +243,16 @@ def _config_to_dict(config: VelaConfig) -> dict[str, Any]:
 
 
 def _dict_to_config(data: dict[str, Any], warnings: list[str]) -> VelaConfig:
+    known_sections = {"llm", "tools", "memory", "policy", "prompt"}
+    unknown_sections = sorted(set(data) - known_sections)
+    if unknown_sections:
+        warnings.append(f"Ignored unknown config sections: {', '.join(unknown_sections)}")
     return VelaConfig(
         llm=_section(LlmConfig, data, "llm", warnings),
         tools=_section(ToolsConfig, data, "tools", warnings),
         memory=_section(MemoryConfig, data, "memory", warnings),
         policy=_section(PolicyConfig, data, "policy", warnings),
         prompt=_section(PromptConfig, data, "prompt", warnings),
-        features=_section(FeatureConfig, data, "features", warnings),
     )
 
 

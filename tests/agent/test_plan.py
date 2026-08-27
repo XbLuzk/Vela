@@ -79,7 +79,7 @@ def test_planner_uses_model_for_simple_goal():
 
 
 def test_plan_agent_rejects_non_positive_task_turn_limit(tmp_path):
-    config = load_config(project_root=tmp_path)
+    config = load_config()
 
     with pytest.raises(ValueError, match="max_task_turns must be at least 1"):
         LangGraphPlanAgent(
@@ -103,7 +103,7 @@ def test_closing_plan_run_closes_langgraph_stream(tmp_path, monkeypatch):
             finally:
                 self.closed = True
 
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     graph = BlockingGraph()
     agent = LangGraphPlanAgent(
         llm_client=FakeClient(),
@@ -135,7 +135,7 @@ def test_plan_cleanup_failure_does_not_replace_task_cancellation(tmp_path, monke
             finally:
                 raise RuntimeError("plan cleanup failed")
 
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     graph = FailingCleanupGraph()
     agent = LangGraphPlanAgent(
         llm_client=FakeClient(),
@@ -164,7 +164,7 @@ def test_plan_execute_runs_independent_tasks_in_parallel(tmp_path, monkeypatch):
     client = ParallelPlanClient()
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.policy.approval_mode = "auto"
     agent = LangGraphPlanAgent(
         llm_client=client,
@@ -225,7 +225,7 @@ def test_plan_review_can_modify_then_execute(tmp_path, monkeypatch):
     agent = LangGraphPlanAgent(
         llm_client=client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         plan_review_callback=lambda _plan: next(decisions),
     )
@@ -252,7 +252,7 @@ def test_plan_review_cancel_stops_before_task_execution(tmp_path, monkeypatch):
     agent = LangGraphPlanAgent(
         llm_client=client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         plan_review_callback=lambda _plan: PlanReviewDecision.cancel(),
     )

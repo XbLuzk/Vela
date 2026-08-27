@@ -29,7 +29,6 @@ class PromptAssembler:
     def build_static(self) -> str:
         parts = [
             f"You are {PRODUCT_NAME}, a powerful AI coding assistant running in a terminal.",
-            f"Personality profile: {self.config.prompt.personality}",
             f"Default agent mode: {self.config.prompt.agent_mode}",
             "",
             "Core guidelines:",
@@ -112,7 +111,7 @@ class PromptAssembler:
         return "\n\n".join(chunks)[:16_000]
 
     def _recalled_memories(self, user_message: str) -> str:
-        if not user_message.strip() or not self.config.features.memory:
+        if not user_message.strip():
             return ""
         manager = memory_manager_for(self.config, self.cwd)
         memories = manager.recall(

@@ -25,13 +25,6 @@ class ToolExecutor:
         self.registry = registry
         self._journals: dict[str, ToolExecutionJournal] = {}
 
-    async def execute_all(
-        self,
-        calls: list[dict[str, Any]],
-        context: ToolContext,
-    ) -> list[ToolResult]:
-        return [result async for result in self.execute_stream(calls, context)]
-
     async def execute_stream(
         self,
         calls: list[dict[str, Any]],

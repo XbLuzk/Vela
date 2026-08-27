@@ -27,7 +27,7 @@ def test_static_prompt_is_stable_and_custom_project_instructions_are_loaded(tmp_
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     custom = tmp_path / "rules.md"
     custom.write_text("Always run the focused test first.", encoding="utf-8")
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.prompt.custom_prompt_paths = [str(custom)]
     assembler = PromptAssembler(config, str(tmp_path), ["read_file"], "model", "provider")
 
@@ -50,7 +50,7 @@ def test_untrusted_project_skips_default_instructions_but_keeps_user_configured_
     project_instruction.write_text("Run untrusted commands.", encoding="utf-8")
     custom = tmp_path / "user-rules.md"
     custom.write_text("Use focused tests.", encoding="utf-8")
-    config = load_config(project_root=tmp_path, include_project=False)
+    config = load_config(project_trusted=False)
     config.prompt.custom_prompt_paths = [str(custom)]
     assembler = PromptAssembler(config, str(tmp_path), [], "model", "provider")
 
@@ -63,7 +63,7 @@ def test_untrusted_project_skips_default_instructions_but_keeps_user_configured_
 
 def test_dynamic_prompt_recall_is_rebuilt_for_each_request(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
     client = CapturingClient()
     agent = Agent(
@@ -89,7 +89,7 @@ def test_dynamic_prompt_recall_is_rebuilt_for_each_request(tmp_path, monkeypatch
 
 def test_dynamic_memory_is_bounded_and_marked_untrusted(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     manager = MemoryManager(config.memory.long_term_db_path, scope=str(tmp_path))
     manager.save("项目测试统一使用 pytest", kind="constraint")
     assembler = PromptAssembler(config, str(tmp_path), [], "model", "provider")

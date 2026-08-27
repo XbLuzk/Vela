@@ -32,10 +32,7 @@ class OpenAICompatibleClient:
     @property
     def supports_images(self) -> bool:
         model = self.model.lower()
-        provider = self.provider_name.lower()
-        return any(marker in model for marker in ("vision", "image", "5v", "vl")) or (
-            provider in {"glm", "zhipu"} and "5v" in model
-        )
+        return any(marker in model for marker in ("vision", "image", "5v", "vl"))
 
     async def chat(
         self,
@@ -48,8 +45,7 @@ class OpenAICompatibleClient:
             yield {
                 "type": "error",
                 "error": RuntimeError(
-                    "VELA_API_KEY is not configured. Set it in env, ~/.vela/config.json, "
-                    "or project .vela/config.json."
+                    "VELA_API_KEY is not configured. Set it in env or ~/.vela/config.json."
                 ),
             }
             return

@@ -9,11 +9,9 @@ async def build_tool_registry(
     *,
     config: VelaConfig,
     cwd: str,
-) -> tuple[ToolRegistry, McpClientManager | None]:
+) -> tuple[ToolRegistry, McpClientManager]:
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
-    manager: McpClientManager | None = None
-    if config.features.mcp:
-        manager = McpClientManager(cwd, include_project=config.project_trusted)
-        registry.register_all(await manager.load_tools())
+    manager = McpClientManager(cwd, include_project=config.project_trusted)
+    registry.register_all(await manager.load_tools())
     return registry, manager

@@ -20,10 +20,10 @@ from vela.tools import ToolRegistry
 from vela.types import Usage
 
 
-def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch):
+def test_memory_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     project = tmp_path / "project"
-    config = load_config(project_root=project)
+    config = load_config()
     active = ActiveSession.open(project, store=SessionStore(tmp_path / "sessions.db"))
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=160)
@@ -32,7 +32,10 @@ def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch)
         cwd=str(project),
         config=config,
         agent=SimpleNamespace(
-            llm_client=SimpleNamespace(max_context_window=20_000),
+            llm_client=SimpleNamespace(
+                model_name="test-model",
+                max_context_window=20_000,
+            ),
             last_usage=Usage(),
         ),
         registry=ToolRegistry(),
@@ -40,12 +43,13 @@ def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch)
         renderer=RichRenderer(console),
         active_session=active,
         task_controller=InteractiveTaskController(),
+        mcp_manager=SimpleNamespace(specs={}, config_warnings=[], last_errors={}),
     )
 
     for command in (
-        "/save remember this",
+        "/memory save remember this",
         "/memory search remember",
-        "/context",
+        "/status",
         "/hitl auto",
         "/status config",
         "/status policy",
@@ -54,13 +58,15 @@ def test_context_and_settings_commands_use_shared_runtime(tmp_path, monkeypatch)
         "/status mcp",
     ):
         asyncio.run(handle_slash(command, runtime))
+    asyncio.run(handle_slash("/hitl on", runtime))
 
     output = stream.getvalue()
     assert "Saved memory" in output
     assert "remember this" in output
-    assert "Vela Context" in output
+    assert "Vela Status" in output
     assert "Approval mode: Auto" in output
-    assert "vela mcp list" in output
+    assert "(no MCP servers)" in output
+    assert "/hitl ask|auto" in output
     assert runtime.approval_mode.mode == "auto"
 
 
@@ -145,7 +151,7 @@ def test_trust_command_reports_store_errors(tmp_path, monkeypatch):
 def _trust_runtime(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
-    config = load_config(project_root=project)
+    config = load_config()
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=160)
     return (
@@ -165,6 +171,7 @@ def _trust_runtime(tmp_path):
                 store=SessionStore(tmp_path / "sessions.db"),
             ),
             task_controller=InteractiveTaskController(),
+            mcp_manager=SimpleNamespace(specs={}, config_warnings=[], last_errors={}),
         ),
         stream,
     )

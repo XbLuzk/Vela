@@ -50,7 +50,7 @@ if __name__ == "__main__":
         tools = await manager.load_tools()
         names = [tool.name for tool in tools]
         tool = next(item for item in tools if item.name == "mcp__fake__echo")
-        config = load_config(project_root=tmp_path)
+        config = load_config()
         config.policy.approval_mode = "auto"
         result = await tool.execute({"text": "ok"}, ToolContext(cwd=str(tmp_path), config=config))
         return names, result

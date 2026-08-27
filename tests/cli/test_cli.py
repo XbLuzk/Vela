@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -48,7 +49,7 @@ def test_team_mode_is_rejected(tmp_path):
     assert "mode must be react or plan" in result.output
 
 
-def test_noninteractive_project_resources_are_ignored_until_explicitly_trusted(
+def test_project_trust_controls_instructions_but_never_changes_llm_config(
     tmp_path,
     monkeypatch,
 ):
@@ -82,7 +83,7 @@ def test_noninteractive_project_resources_are_ignored_until_explicitly_trusted(
     assert trusted.exit_code == 0
     assert [(model, trusted) for model, trusted, _ in seen] == [
         ("deepseek-v4-flash", False),
-        ("project-model", True),
+        ("deepseek-v4-flash", True),
     ]
     assert "untrusted instruction" not in seen[0][2]
     assert "untrusted instruction" in seen[1][2]
@@ -112,10 +113,10 @@ def test_single_prompt_json_uses_ephemeral_status_without_run_id(
     capsys,
 ):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = cli.load_config(project_root=tmp_path, env={"VELA_API_KEY": "test"})
+    config = cli.load_config(env={"VELA_API_KEY": "test"})
 
     async def fake_registry(**kwargs):  # noqa: ARG001
-        return ToolRegistry(), None
+        return ToolRegistry(), SimpleNamespace(last_errors=[])
 
     class FakeAgent:
         def __init__(self, **kwargs):  # noqa: ARG002

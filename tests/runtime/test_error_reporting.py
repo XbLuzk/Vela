@@ -17,34 +17,31 @@ from vela.types import Message
 
 
 def test_malformed_config_file_is_reported(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    project = tmp_path / "project"
-    (project / ".vela").mkdir(parents=True)
-    (project / ".vela" / "config.json").write_text("{not json", encoding="utf-8")
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".vela").mkdir(parents=True)
+    (home / ".vela" / "config.json").write_text("{not json", encoding="utf-8")
 
     warnings: list[str] = []
-    config = load_config(project_root=project, env={}, warnings=warnings)
+    config = load_config(env={}, warnings=warnings)
 
     assert config.llm.provider
     assert any("invalid JSON" in warning for warning in warnings)
 
 
 def test_unknown_and_invalid_config_values_are_reported(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    project = tmp_path / "project"
-    (project / ".vela").mkdir(parents=True)
-    (project / ".vela" / "config.json").write_text(
-        json.dumps({"llm": {"nope": 1}, "policy": "not-an-object"}),
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".vela").mkdir(parents=True)
+    (home / ".vela" / "config.json").write_text(
+        json.dumps({"llm": {"nope": 1}, "policy": "not-an-object", "unexpected": {}}),
         encoding="utf-8",
     )
 
     warnings: list[str] = []
     config = load_config(
-        project_root=project,
         env={
             "VELA_TEMPERATURE": "warm",
-            "VELA_HITL": "sometimes",
-            "VELA_MCP": "maybe",
         },
         warnings=warnings,
     )
@@ -54,65 +51,13 @@ def test_unknown_and_invalid_config_values_are_reported(tmp_path, monkeypatch) -
     assert "unknown llm config keys: nope" in joined
     assert "'policy'" in joined
     assert "VELA_TEMPERATURE='warm'" in joined
-    assert "VELA_HITL='sometimes'" in joined
-    assert "VELA_MCP='maybe'" in joined
+    assert "unknown config sections: unexpected" in joined
 
 
 def test_config_warnings_are_optional(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
-    assert load_config(project_root=tmp_path, env={}).llm.provider
-
-
-def test_legacy_hitl_config_migrates_and_new_environment_value_wins(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    project = tmp_path / "project"
-    (project / ".vela").mkdir(parents=True)
-    (project / ".vela" / "config.json").write_text(
-        json.dumps({"policy": {"hitl_mode": "never"}}),
-        encoding="utf-8",
-    )
-
-    warnings: list[str] = []
-    config = load_config(
-        project_root=project,
-        env={"VELA_HITL": "never", "VELA_APPROVAL_MODE": "ask"},
-        warnings=warnings,
-    )
-
-    assert config.policy.approval_mode == "ask"
-    assert config.policy.path_guard_enabled is True
-    assert config.policy.command_guard_enabled is True
-    assert any("Migrated policy.hitl_mode" in warning for warning in warnings)
-    assert any("Migrated legacy VELA_HITL" in warning for warning in warnings)
-
-
-def test_removed_context_tuning_keys_are_reported_and_ignored(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    project = tmp_path / "project"
-    (project / ".vela").mkdir(parents=True)
-    (project / ".vela" / "config.json").write_text(
-        json.dumps(
-            {
-                "memory": {
-                    "max_conversation_history": 42,
-                    "compression_threshold": 0.5,
-                    "summary_max_chars": 1234,
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    warnings: list[str] = []
-    config = load_config(project_root=project, env={}, warnings=warnings)
-
-    assert config.memory.max_conversation_history == 42
-    assert not hasattr(config.memory, "compression_threshold")
-    assert any("unknown memory config keys" in warning for warning in warnings)
+    assert load_config(env={}).llm.provider
 
 
 # MCP config ------------------------------------------------------------------

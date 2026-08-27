@@ -9,9 +9,13 @@ from vela.tools.executor import ToolExecutor
 from vela.tools.registry import ToolRegistry
 
 
+async def _execute_all(executor, calls, context):
+    return [result async for result in executor.execute_stream(calls, context)]
+
+
 def test_auto_mode_runs_approval_required_tool_without_callback(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     controller = ApprovalModeController(config)
     executions: list[str] = []
 
@@ -35,11 +39,11 @@ def test_auto_mode_runs_approval_required_tool_without_callback(tmp_path, monkey
     call = {"id": "call-1", "name": "mutate", "arguments": {"value": "ok"}}
     context = ToolContext(cwd=str(tmp_path), config=config)
 
-    denied = asyncio.run(executor.execute_all([call], context))[0]
+    denied = asyncio.run(_execute_all(executor, [call], context))[0]
     assert denied.is_error
     assert executions == []
 
     controller.set("auto")
-    approved = asyncio.run(executor.execute_all([call], context))[0]
+    approved = asyncio.run(_execute_all(executor, [call], context))[0]
     assert not approved.is_error
     assert executions == ["ok"]

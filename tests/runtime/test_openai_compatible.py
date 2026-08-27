@@ -77,7 +77,6 @@ def test_model_name_exposes_the_configured_model():
         ("deepseek", "image-model", True),
         ("openai-compatible", "qwen2.5-VL", True),
         ("glm", "glm-4.5v", True),
-        ("zhipu", "GLM-4.5V", True),
         ("deepseek", "deepseek-chat", False),
         ("glm", "glm-4.6", False),
     ],

@@ -14,8 +14,8 @@ from vela.entrypoints import repl, repl_tasks
 from vela.entrypoints.repl import _repl_loop
 from vela.entrypoints.repl_commands import SLASH_COMMANDS, handle_slash
 from vela.entrypoints.repl_tasks import (
+    _run_plan_with_session,
     run_agent_with_session,
-    run_delegated_with_session,
     run_events,
 )
 from vela.render.rich_renderer import RichRenderer
@@ -48,8 +48,6 @@ def test_repl_lists_and_resumes_a_persisted_session(tmp_path):
 
     output = stream.getvalue()
     assert "/session" in SLASH_COMMANDS
-    assert "/sessions" not in SLASH_COMMANDS
-    assert "/resume" not in SLASH_COMMANDS
     assert previous.id in output
     assert "continue this feature" in output
     assert f"Resumed {previous.id}" in output
@@ -157,6 +155,7 @@ def test_repl_propagates_cancel_and_preserves_session(tmp_path, monkeypatch) -> 
     agent = _FakeAgent()
     stream = StringIO()
     console = Console(file=stream, color_system=None, width=160)
+    runtime = _repl_runtime(tmp_path / "project", active, agent, console)
 
     async def cancel_run(*_args, **_kwargs):
         raise asyncio.CancelledError
@@ -164,15 +163,7 @@ def test_repl_propagates_cancel_and_preserves_session(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(repl_tasks, "run_events", cancel_run)
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(
-            run_agent_with_session(
-                agent,
-                RichRenderer(console),
-                "cancel me",
-                active,
-                console,
-            )
-        )
+        asyncio.run(run_agent_with_session("cancel me", runtime))
 
     assert active.current.message_count == 1
     assert "cancelled" in str(active.current.messages[0].content).lower()
@@ -209,7 +200,7 @@ def test_agent_forwards_plan_review_callback_to_plan_mode(tmp_path, monkeypatch)
 
     monkeypatch.setattr(agent_module, "LangGraphPlanAgent", create_delegate)
     callback = lambda plan: None  # noqa: E731, ARG005 - identity assertion only
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
     agent = Agent(
         llm_client=_ErrorClient(),
@@ -233,6 +224,7 @@ def test_repl_persists_incremental_history_when_run_is_cancelled(tmp_path, monke
     active = ActiveSession.open(tmp_path / "project", store=store)
     agent = _FakeAgent()
     console = Console(file=StringIO(), color_system=None)
+    runtime = _repl_runtime(tmp_path / "project", active, agent, console)
 
     async def cancel_after_history_update(*_args, **_kwargs):
         message = "persist me"
@@ -242,15 +234,7 @@ def test_repl_persists_incremental_history_when_run_is_cancelled(tmp_path, monke
     monkeypatch.setattr(repl_tasks, "run_events", cancel_after_history_update)
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(
-            run_agent_with_session(
-                agent,
-                RichRenderer(console),
-                "persist me",
-                active,
-                console,
-            )
-        )
+        asyncio.run(run_agent_with_session("persist me", runtime))
 
     persisted = store.get(active.current.id)
     assert persisted is not None
@@ -263,6 +247,7 @@ def test_repl_persists_and_resumes_cancelled_pending_tool_call(tmp_path, monkeyp
     active = ActiveSession.open(project, store=store)
     agent = _FakeAgent()
     console = Console(file=StringIO(), color_system=None)
+    runtime = _repl_runtime(project, active, agent, console)
 
     async def cancel_with_pending_tool(*_args, **_kwargs):
         message = "resume me"
@@ -279,15 +264,7 @@ def test_repl_persists_and_resumes_cancelled_pending_tool_call(tmp_path, monkeyp
     monkeypatch.setattr(repl_tasks, "run_events", cancel_with_pending_tool)
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(
-            run_agent_with_session(
-                agent,
-                RichRenderer(console),
-                "resume me",
-                active,
-                console,
-            )
-        )
+        asyncio.run(run_agent_with_session("resume me", runtime))
 
     resumed = ActiveSession.open(project, resume=True, store=store)
     tool_messages = [message for message in resumed.current.messages if message.role == "tool"]
@@ -330,10 +307,8 @@ def test_cancelled_run_keeps_completed_tool_result_and_closes_only_pending_call(
             is_read_only=False,
         )
     )
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.skill = False
-    config.features.memory = False
     agent = Agent(
         llm_client=_TwoToolClient(),
         tool_registry=registry,
@@ -343,17 +318,10 @@ def test_cancelled_run_keeps_completed_tool_result_and_closes_only_pending_call(
     store = SessionStore(tmp_path / "sessions.db")
     active = ActiveSession.open(tmp_path, store=store)
     console = Console(file=StringIO(), color_system=None)
+    runtime = _repl_runtime(tmp_path, active, agent, console)
 
     async def run():
-        task = asyncio.create_task(
-            run_agent_with_session(
-                agent,
-                RichRenderer(console),
-                "run two tools",
-                active,
-                console,
-            )
-        )
+        task = asyncio.create_task(run_agent_with_session("run two tools", runtime))
         await second_started.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -601,7 +569,8 @@ def test_delegated_run_preserves_prior_history_and_persists_result(tmp_path):
     delegated = _FakeDelegatedAgent()
     console = Console(file=StringIO(), color_system=None)
 
-    asyncio.run(run_delegated_with_session(delegated, "new task", agent, active, console))
+    runtime = _repl_runtime(tmp_path / "project", active, agent, console)
+    asyncio.run(_run_plan_with_session(delegated, "new task", runtime))
 
     assert [message.content for message in agent.history] == [
         "earlier request",
@@ -622,7 +591,7 @@ def _run_session_command(raw, project, active):
 
 
 def _repl_runtime(project, active, agent, console, *, task_controller=None):
-    config = load_config(project_root=project)
+    config = load_config()
     controller = task_controller or InteractiveTaskController()
     registry = ToolRegistry()
     return repl.ReplRuntime(
@@ -635,14 +604,13 @@ def _repl_runtime(project, active, agent, console, *, task_controller=None):
         renderer=RichRenderer(console),
         active_session=active,
         task_controller=controller,
+        mcp_manager=SimpleNamespace(specs={}, config_warnings=[], last_errors={}),
     )
 
 
 def _agent_with_client(tmp_path, client):
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.skill = False
-    config.features.memory = False
     return Agent(
         llm_client=client,
         tool_registry=ToolRegistry(),

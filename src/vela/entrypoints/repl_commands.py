@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
-from vela.branding import CLI_NAME, PRODUCT_NAME
+from vela.branding import PRODUCT_NAME
 from vela.config import config_to_public_dict
 from vela.entrypoints.model_command import handle_model_command
 from vela.entrypoints.repl_tasks import print_session_warning, start_plan
-from vela.entrypoints.repl_ui import ApprovalMode, approval_mode_label
+from vela.entrypoints.repl_ui import approval_mode_label
 from vela.memory import MemoryManager, memory_manager_for
 from vela.session import ActiveSession
 from vela.skill import SkillRegistry
@@ -27,9 +27,7 @@ SLASH_COMMANDS = [
     "/clear",
     "/cancel",
     "/session",
-    "/context",
     "/memory",
-    "/save",
     "/status",
     "/hitl",
     "/plan",
@@ -59,39 +57,27 @@ Sessions
   /plan --resume        Resume that session's interrupted LangGraph plan
 
 Project trust
-  /trust                Trust project config, MCP, and Skills after restart
+  /trust                Trust project instructions, MCP, and Skills after restart
   /trust deny           Revoke project trust after restart
 
 Other commands
   {commands}
 """
 
-MOVED_COMMANDS = {
-    "/config": "/status config",
-    "/policy": "/status policy",
-    "/tools": "/status tools",
-    "/usage": "/status usage",
-    "/mcp": "/status mcp",
-    "/sessions": "/session list",
-    "/resume": "/session resume <id|number>",
-}
-
 
 async def handle_slash(raw: str, runtime: ReplRuntime) -> bool:
     """Dispatch one slash command and return whether the REPL should exit."""
     command, _, rest = raw.partition(" ")
     arg = rest.strip()
-    if command in {"/exit", "/quit"}:
+    if command == "/exit":
         return True
 
-    if command in MOVED_COMMANDS:
-        runtime.console.print(f"[yellow]Moved:[/yellow] use {MOVED_COMMANDS[command]}")
-    elif command in {"/help", "/cancel", "/clear"}:
+    if command in {"/help", "/cancel", "/clear"}:
         _handle_repl_command(command, runtime)
     elif command == "/session":
         _handle_session_command(arg, runtime)
-    elif command in {"/context", "/memory", "/save"}:
-        handle_context_command(command, arg, runtime)
+    elif command == "/memory":
+        handle_memory_command(arg, runtime)
     elif command == "/plan":
         if arg:
             start_plan(arg, runtime)
@@ -201,22 +187,14 @@ def _resume_command(reference: str, runtime: ReplRuntime) -> None:
     runtime.console.print(f"Resumed {record.id} ({record.message_count} messages).")
 
 
-def handle_context_command(command: str, arg: str, runtime: ReplRuntime) -> None:
+def handle_memory_command(arg: str, runtime: ReplRuntime) -> None:
     config = runtime.config
     try:
         manager = memory_manager_for(config, runtime.cwd)
     except RuntimeError as exc:
         runtime.console.print(f"[red]Memory unavailable:[/red] {exc}")
         return
-    if command == "/context":
-        _show_context(runtime, len(manager.list(limit=5)))
-    elif command == "/memory":
-        _handle_memory(arg, runtime, manager)
-    elif not arg:
-        runtime.console.print("[red]Usage:[/red] /save <fact>")
-    else:
-        memory_id = manager.save(arg, source="manual", importance=0.8)
-        runtime.console.print(f"Saved memory #{memory_id}")
+    _handle_memory(arg, runtime, manager)
 
 
 async def handle_settings_command(command: str, arg: str, runtime: ReplRuntime) -> None:
@@ -242,8 +220,11 @@ def _handle_status(section: str, runtime: ReplRuntime) -> None:
         table.add_column("Field")
         table.add_column("Value")
         table.add_row("model", runtime.agent.llm_client.model_name)
+        table.add_row("cwd", runtime.cwd)
+        table.add_row("context window", str(runtime.agent.llm_client.max_context_window))
         table.add_row("approval", approval_mode_label(runtime.approval_mode.mode))
-        table.add_row("task", runtime.task_controller.state.value)
+        task_state = runtime.task_controller.state
+        table.add_row("task", task_state.value if task_state else "idle")
         table.add_row("session", runtime.active_session.current.id)
         table.add_row("tools", str(len(runtime.registry.list_names())))
         table.add_row(
@@ -258,10 +239,13 @@ def _handle_status(section: str, runtime: ReplRuntime) -> None:
             ),
         )
         manager = runtime.mcp_manager
-        mcp_count = (
-            sum(1 for spec in manager.specs.values() if spec.enabled) if manager is not None else 0
-        )
-        table.add_row("mcp", str(mcp_count) if manager is not None else "unavailable")
+        mcp_count = sum(1 for spec in manager.specs.values() if spec.enabled)
+        table.add_row("mcp", str(mcp_count))
+        try:
+            memory_count = len(memory_manager_for(runtime.config, runtime.cwd).list(limit=5))
+            table.add_row("memory", f"{memory_count} recent entries")
+        except RuntimeError:
+            table.add_row("memory", "unavailable")
         runtime.console.print(table)
     elif section == "config":
         runtime.console.print_json(
@@ -273,8 +257,6 @@ def _handle_status(section: str, runtime: ReplRuntime) -> None:
             json.dumps(
                 {
                     "approval_mode": policy.approval_mode,
-                    "path_guard_enabled": policy.path_guard_enabled,
-                    "command_guard_enabled": policy.command_guard_enabled,
                 },
                 ensure_ascii=False,
             )
@@ -296,9 +278,8 @@ def _handle_status(section: str, runtime: ReplRuntime) -> None:
 def _handle_mcp(runtime: ReplRuntime) -> None:
     """Show configured MCP servers together with config and load failures."""
     manager = runtime.mcp_manager
-    if manager is None:
-        runtime.console.print(f"MCP is disabled. Use `{CLI_NAME} mcp list` to inspect config.")
-        return
+    if not manager.specs:
+        runtime.console.print("(no MCP servers)")
     for spec in manager.specs.values():
         target = spec.url or f"{spec.command} {' '.join(spec.args)}".strip()
         state = "enabled" if spec.enabled else "disabled"
@@ -309,22 +290,12 @@ def _handle_mcp(runtime: ReplRuntime) -> None:
         runtime.console.print(f"[yellow]MCP server {name} failed to load:[/yellow] {error}")
 
 
-def _show_context(runtime: ReplRuntime, memory_count: int) -> None:
-    config = runtime.config
-    table = Table(title=f"{PRODUCT_NAME} Context")
-    table.add_column("Field")
-    table.add_column("Value")
-    table.add_row("cwd", runtime.cwd)
-    table.add_row("model", f"{config.llm.model} ({config.llm.provider})")
-    table.add_row("context window", str(runtime.agent.llm_client.max_context_window))
-    table.add_row("memory", f"{memory_count} recent entries")
-    table.add_row("tools", str(len(runtime.registry.list_names())))
-    runtime.console.print(table)
-
-
 def _handle_memory(arg: str, runtime: ReplRuntime, manager: MemoryManager) -> None:
     sub, _, rest = arg.partition(" ")
-    if sub == "clear":
+    if sub == "save" and rest.strip():
+        memory_id = manager.save(rest.strip(), source="manual", importance=0.8)
+        runtime.console.print(f"Saved memory #{memory_id}")
+    elif sub == "clear":
         runtime.console.print(f"Cleared {manager.clear()} memories.")
     elif sub == "search":
         rows = manager.recall(rest, mark_access=False)
@@ -335,22 +306,20 @@ def _handle_memory(arg: str, runtime: ReplRuntime, manager: MemoryManager) -> No
         runtime.console.print_json(json.dumps(manager.stats(), ensure_ascii=False))
     elif sub == "delete" and rest.strip().isdigit():
         runtime.console.print(f"Deleted: {manager.delete(int(rest.strip()))}")
-    else:
+    elif sub in {"", "list"}:
         rows = manager.list()
         runtime.console.print(
             "\n".join(f"#{row.id} {row.content}" for row in rows) or "(no memories)"
         )
+    else:
+        runtime.console.print(
+            "[red]Usage:[/red] /memory [list|save <fact>|search <query>|stats|delete <id>|clear]"
+        )
 
 
 def _handle_hitl(arg: str, runtime: ReplRuntime) -> None:
-    aliases: dict[str, ApprovalMode] = {
-        "ask": "ask",
-        "on": "ask",
-        "auto": "auto",
-        "off": "auto",
-    }
-    if arg in aliases:
-        runtime.approval_mode.set(aliases[arg])
+    if arg in {"ask", "auto"}:
+        runtime.approval_mode.set(arg)
     elif arg:
         runtime.console.print("[red]Usage:[/red] /hitl ask|auto")
         return

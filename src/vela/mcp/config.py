@@ -46,7 +46,7 @@ def load_mcp_server_specs(
         data = _read_json(path, sink)
         if not data:
             continue
-        servers = data.get("mcpServers", data)
+        servers = data.get("mcpServers")
         if isinstance(servers, dict):
             merged.update(servers)
         else:
@@ -114,7 +114,9 @@ def _read_json(path: Path, warnings: list[str]) -> dict[str, Any] | None:
 
 def _spec_from_raw(name: str, raw: dict[str, Any], project_root: Path) -> McpServerSpec:
     default_type = "streamable_http" if raw.get("url") else "stdio"
-    server_type = str(raw.get("type") or raw.get("transport") or default_type)
+    server_type = str(raw.get("type") or default_type)
+    if server_type not in {"stdio", "streamable_http"}:
+        raise ValueError("type must be stdio or streamable_http")
     env = {
         key: _expand(str(value), project_root) for key, value in dict(raw.get("env") or {}).items()
     }
@@ -133,7 +135,7 @@ def _spec_from_raw(name: str, raw: dict[str, Any], project_root: Path) -> McpSer
             for key, value in dict(raw.get("headers") or {}).items()
         },
         enabled=bool(raw.get("enabled", True)),
-        timeout=float(raw.get("timeout", raw.get("startup_timeout", 30.0)) or 30.0),
+        timeout=float(raw.get("timeout", 30.0) or 30.0),
     )
 
 

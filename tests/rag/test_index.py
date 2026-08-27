@@ -89,7 +89,7 @@ def test_same_size_file_with_restored_mtime_is_still_refreshed(tmp_path) -> None
     assert index.search("new_name")[0].symbol == "new_name"
 
 
-def test_existing_index_schema_gains_incremental_metadata_columns(tmp_path) -> None:
+def test_existing_index_with_old_schema_is_rebuilt(tmp_path) -> None:
     database = tmp_path / "index.sqlite"
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE files (path TEXT PRIMARY KEY, digest TEXT NOT NULL)")

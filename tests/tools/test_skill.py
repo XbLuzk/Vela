@@ -63,7 +63,7 @@ def test_skill_context_buffer_is_one_shot_and_capped():
 def test_load_skill_pushes_body_into_context_buffer(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     _write_skill(tmp_path / ".vela" / "skills", "demo", "demo desc", "v1", body="demo body")
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     buffer = SkillContextBuffer()
     context = ToolContext(cwd=str(tmp_path), config=config, skill_context_buffer=buffer)
 
@@ -78,7 +78,7 @@ def test_load_skill_pushes_body_into_context_buffer(tmp_path, monkeypatch):
 def test_load_skill_is_idempotent_within_one_tool_context(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     _write_skill(tmp_path / ".vela" / "skills", "demo", "demo desc", "v1", body="demo body")
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     buffer = SkillContextBuffer()
     context = ToolContext(cwd=str(tmp_path), config=config, skill_context_buffer=buffer)
 
@@ -96,7 +96,7 @@ def test_load_skill_is_idempotent_within_one_tool_context(tmp_path, monkeypatch)
 def test_load_skill_can_be_loaded_again_in_a_new_tool_context(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     _write_skill(tmp_path / ".vela" / "skills", "demo", "demo desc", "v1", body="demo body")
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     first_buffer = SkillContextBuffer()
     second_buffer = SkillContextBuffer()
 

@@ -13,8 +13,12 @@ from vela.tools.executor import ToolExecutor
 from vela.tools.journal import ToolExecutionJournal, execution_identity
 
 
+async def _execute_all(executor, calls, context):
+    return [result async for result in executor.execute_stream(calls, context)]
+
+
 def _config(tmp_path):
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.policy.approval_mode = "auto"
     config.tools.execution_journal_path = str(tmp_path / "state" / "tool-executions.sqlite")
     return config
@@ -48,14 +52,16 @@ def test_completed_mutating_tool_is_replayed_without_second_execution(tmp_path):
     call = {"id": "first-id", "name": "mutate", "arguments": {"value": "one"}}
 
     first = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             [call],
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="session:plan:task"),
         )
     )[0]
     replay_call = {**call, "id": "resumed-id"}
     replayed = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             [replay_call],
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="session:plan:task"),
         )
@@ -85,13 +91,15 @@ def test_identical_calls_keep_distinct_sequence_keys_and_replay_in_order(tmp_pat
     ]
 
     first = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             calls,
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="duplicate-scope"),
         )
     )
     second = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             calls,
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="duplicate-scope"),
         )
@@ -134,13 +142,15 @@ def test_read_only_variation_does_not_shift_mutation_identity(tmp_path):
     ]
 
     asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             first,
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="read-variation"),
         )
     )
     replayed = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             resumed,
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="read-variation"),
         )
@@ -168,7 +178,8 @@ def test_cancelled_tool_becomes_uncertain_and_requires_explicit_retry(tmp_path):
 
     async def cancel_first_run():
         runner = asyncio.create_task(
-            executor.execute_all(
+            _execute_all(
+                executor,
                 [call],
                 ToolContext(cwd=str(tmp_path), config=config, execution_scope="uncertain-scope"),
             )
@@ -181,7 +192,8 @@ def test_cancelled_tool_becomes_uncertain_and_requires_explicit_retry(tmp_path):
     asyncio.run(cancel_first_run())
 
     blocked = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             [call],
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="uncertain-scope"),
         )
@@ -191,7 +203,8 @@ def test_cancelled_tool_becomes_uncertain_and_requires_explicit_retry(tmp_path):
     assert blocked.recovery_status == "uncertain"
 
     retried = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             [call],
             ToolContext(
                 cwd=str(tmp_path),
@@ -221,19 +234,22 @@ def test_tool_exception_remains_uncertain_instead_of_being_cached_as_completed(t
     call = {"id": "call-1", "name": "mutate", "arguments": {"value": "one"}}
 
     first = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             [call],
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="timeout-scope"),
         )
     )[0]
     blocked = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             [call],
             ToolContext(cwd=str(tmp_path), config=config, execution_scope="timeout-scope"),
         )
     )[0]
     retried = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             [call],
             ToolContext(
                 cwd=str(tmp_path),
@@ -272,7 +288,8 @@ def test_write_file_reconciles_uncertain_overwrite_without_reexecuting(tmp_path)
     target.write_text("already written", encoding="utf-8")
 
     result = asyncio.run(
-        executor.execute_all(
+        _execute_all(
+            executor,
             [{"id": "write-1", "name": "write_file", "arguments": payload}],
             ToolContext(cwd=str(tmp_path), config=config, execution_scope=scope),
         )

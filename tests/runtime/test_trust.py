@@ -45,7 +45,7 @@ def test_trust_resolution_is_fail_closed_noninteractive_and_persists_prompt(tmp_
     )
 
 
-def test_sensitive_resource_detection_covers_config_env_mcp_instructions_and_skills(
+def test_sensitive_resource_detection_covers_mcp_instructions_and_skills(
     tmp_path,
 ) -> None:
     project = tmp_path / "project"
@@ -53,8 +53,13 @@ def test_sensitive_resource_detection_covers_config_env_mcp_instructions_and_ski
     assert not has_trust_sensitive_resources(project)
 
     (project / ".env").write_text("VELA_MODEL=test\n", encoding="utf-8")
+    (project / ".vela").mkdir()
+    (project / ".vela" / "config.json").write_text("{}", encoding="utf-8")
+    assert not has_trust_sensitive_resources(project)
+
+    (project / ".vela" / "mcp.json").write_text("{}", encoding="utf-8")
     assert has_trust_sensitive_resources(project)
-    (project / ".env").unlink()
+    (project / ".vela" / "mcp.json").unlink()
 
     (project / "AGENTS.md").write_text("project rules", encoding="utf-8")
     assert has_trust_sensitive_resources(project)

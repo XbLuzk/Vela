@@ -98,19 +98,6 @@ def _workspace_tools() -> list[Tool]:
             handler=_list_dir,
         ),
         Tool(
-            name="glob",
-            description="Find files by glob pattern inside the current workspace.",
-            parameters=object_schema(
-                {
-                    "pattern": {"type": "string", "description": "Glob pattern"},
-                    "limit": {"type": "number", "description": "Maximum results"},
-                },
-                ["pattern"],
-            ),
-            required_keys=["pattern"],
-            handler=_glob_files,
-        ),
-        Tool(
             name="grep",
             description="Search text in workspace files.",
             parameters=object_schema(
@@ -124,46 +111,6 @@ def _workspace_tools() -> list[Tool]:
             ),
             required_keys=["pattern"],
             handler=_grep,
-        ),
-        Tool(
-            name="directory_tree",
-            description=(
-                "Get a recursive tree view of files and directories as indented text. "
-                "Each entry shows the name and type. Files have no children, "
-                "while directories always show their contents."
-            ),
-            parameters=object_schema(
-                {
-                    "path": {
-                        "type": "string",
-                        "description": "Directory path (default: workspace root)",
-                    },
-                    "max_depth": {
-                        "type": "number",
-                        "description": "Maximum recursion depth (default: 3)",
-                    },
-                    "exclude_patterns": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Directory names to exclude from the tree",
-                    },
-                },
-            ),
-            required_keys=[],
-            handler=_directory_tree,
-        ),
-        Tool(
-            name="get_file_info",
-            description=(
-                "Retrieve detailed metadata about a file or directory — size, "
-                "modification time, permissions, and type."
-            ),
-            parameters=object_schema(
-                {"path": {"type": "string", "description": "Path to inspect"}},
-                ["path"],
-            ),
-            required_keys=["path"],
-            handler=_get_file_info,
         ),
     ]
 
@@ -266,7 +213,6 @@ async def _read_file(payload: dict[str, Any], context: ToolContext) -> ToolResul
         str(payload["path"]),
         offset=int(payload.get("offset") or 1),
         limit=int(payload.get("limit") or 500),
-        path_guard_enabled=context.config.policy.path_guard_enabled,
     )
     return _to_tool_result(result)
 
@@ -277,7 +223,6 @@ async def _write_file(payload: dict[str, Any], context: ToolContext) -> ToolResu
         str(payload["path"]),
         str(payload["content"]),
         append=bool(payload.get("append")),
-        path_guard_enabled=context.config.policy.path_guard_enabled,
     )
     return _to_tool_result(result)
 
@@ -288,7 +233,6 @@ async def _reconcile_write_file(payload: dict[str, Any], context: ToolContext) -
     resolved = fops.resolve_path(
         context.cwd,
         str(payload["path"]),
-        context.config.policy.path_guard_enabled,
     )
     try:
         existing = resolved.read_text(encoding="utf-8")
@@ -312,7 +256,6 @@ async def _edit_file(payload: dict[str, Any], context: ToolContext) -> ToolResul
         str(payload["path"]),
         str(payload["old_text"]),
         str(payload["new_text"]),
-        path_guard_enabled=context.config.policy.path_guard_enabled,
         dry_run=bool(payload.get("dry_run")),
     )
     return _to_tool_result(result)
@@ -322,16 +265,6 @@ async def _list_dir(payload: dict[str, Any], context: ToolContext) -> ToolResult
     result: FileOpResult = fops.list_directory(
         context.cwd,
         str(payload["path"]),
-        path_guard_enabled=context.config.policy.path_guard_enabled,
-    )
-    return _to_tool_result(result)
-
-
-async def _glob_files(payload: dict[str, Any], _context: ToolContext) -> ToolResult:
-    result: FileOpResult = fops.glob_files(
-        _context.cwd,
-        str(payload["pattern"]),
-        limit=int(payload.get("limit") or 100),
     )
     return _to_tool_result(result)
 
@@ -343,27 +276,6 @@ async def _grep(payload: dict[str, Any], context: ToolContext) -> ToolResult:
         path=str(payload.get("path") or "."),
         limit=int(payload.get("limit") or 100),
         use_regex=bool(payload.get("regex", True)),
-        path_guard_enabled=context.config.policy.path_guard_enabled,
-    )
-    return _to_tool_result(result)
-
-
-async def _directory_tree(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    result: FileOpResult = fops.directory_tree(
-        context.cwd,
-        str(payload.get("path", ".")),
-        max_depth=int(payload.get("max_depth") or 3),
-        path_guard_enabled=context.config.policy.path_guard_enabled,
-        exclude_patterns=tuple(payload.get("exclude_patterns") or ()),
-    )
-    return _to_tool_result(result)
-
-
-async def _get_file_info(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    result: FileOpResult = fops.get_file_info(
-        context.cwd,
-        str(payload["path"]),
-        path_guard_enabled=context.config.policy.path_guard_enabled,
     )
     return _to_tool_result(result)
 
@@ -375,8 +287,7 @@ async def _get_file_info(payload: dict[str, Any], context: ToolContext) -> ToolR
 
 async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     command = str(payload["command"])
-    if context.config.policy.command_guard_enabled:
-        CommandGuard(context.config.policy.command_blacklist).validate(command)
+    CommandGuard(context.config.policy.command_blacklist).validate(command)
     timeout = float(payload.get("timeout") or context.config.tools.timeout)
     proc = await asyncio.create_subprocess_shell(
         command,
@@ -409,8 +320,6 @@ async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
 
 
 async def _save_memory(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    if not context.config.features.memory:
-        return ToolResult("Long-term memory is disabled.", is_error=True)
     manager = memory_manager_for(context.config, context.cwd)
     memory_id = manager.save(
         str(payload["content"]),
@@ -424,8 +333,6 @@ async def _save_memory(payload: dict[str, Any], context: ToolContext) -> ToolRes
 
 
 async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    if not context.config.features.memory:
-        return ToolResult("Long-term memory is disabled.", is_error=True)
     raw_kinds = payload.get("kinds")
     if raw_kinds is not None and not isinstance(raw_kinds, list):
         return ToolResult("search_memory kinds must be an array of strings.", is_error=True)
@@ -450,8 +357,6 @@ async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolR
 
 
 async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    if not context.config.features.skill:
-        return ToolResult("Skills are disabled.", is_error=True)
     skill = SkillRegistry(
         context.cwd,
         include_project=context.config.project_trusted,

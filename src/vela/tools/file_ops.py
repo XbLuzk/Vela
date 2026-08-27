@@ -1,13 +1,12 @@
 """file_ops.py — Encapsulated file operations for the terminal agent.
 
 Provides pure, reusable functions for reading, writing, editing, listing,
-globing, and searching files. Keeps business logic separate from tool
+and searching files. Keeps business logic separate from tool
 definitions so that builtins.py remains a thin wiring layer.
 """
 
 from __future__ import annotations
 
-import glob as glob_module
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,12 +36,9 @@ SKIP_DIRS = frozenset({".git", ".venv", "node_modules", "dist", "build", "target
 MAX_FILE_SIZE = 1_000_000  # 1 MB
 
 
-def resolve_path(cwd: str, value: str, path_guard_enabled: bool = True) -> Path:
-    """Resolve *value* against workspace root *cwd*, optionally enforcing the path guard."""
-    if path_guard_enabled:
-        return PathGuard(cwd).validate(value)
-    path = Path(value)
-    return path if path.is_absolute() else Path(cwd).resolve() / path
+def resolve_path(cwd: str, value: str) -> Path:
+    """Resolve *value* inside workspace root *cwd*."""
+    return PathGuard(cwd).validate(value)
 
 
 def skip_file(path: Path) -> bool:
@@ -66,13 +62,12 @@ def read_file(
     *,
     offset: int = 1,
     limit: int = 500,
-    path_guard_enabled: bool = True,
 ) -> FileOpResult:
     """Return numbered lines from a text file.
 
     *offset* is 1-based; *limit* caps the returned lines.
     """
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path)
     if not resolved.is_file():
         return FileOpResult(f"Not a file: {resolved}", is_error=True)
 
@@ -100,7 +95,6 @@ def write_file(
     content: str,
     *,
     append: bool = False,
-    path_guard_enabled: bool = True,
     run_diagnostics: bool = True,
 ) -> FileOpResult:
     """Write (or append) *content* to *path*.
@@ -108,7 +102,7 @@ def write_file(
     When *run_diagnostics* is True (default) Python files will be
     syntax-checked and results appended to the returned message.
     """
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path)
     encoded = content.encode("utf-8")
     if len(encoded) > 5 * 1024 * 1024:
         return FileOpResult("write_file rejected: content exceeds 5 MB", is_error=True)
@@ -141,7 +135,6 @@ def edit_file(
     old_text: str,
     new_text: str,
     *,
-    path_guard_enabled: bool = True,
     dry_run: bool = False,
 ) -> FileOpResult:
     """Replace the first occurrence of *old_text* with *new_text* in *path*.
@@ -150,7 +143,7 @@ def edit_file(
     content (not line-based), which makes it suitable for structured edits.
     When *dry_run* is True the diff is returned without modifying the file.
     """
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path)
     if not resolved.is_file():
         return FileOpResult(f"Not a file: {resolved}", is_error=True)
 
@@ -222,11 +215,9 @@ def _build_diff_summary(old_text: str, new_text: str) -> str:
 def list_directory(
     cwd: str,
     path: str,
-    *,
-    path_guard_enabled: bool = True,
 ) -> FileOpResult:
     """List entries in a directory, directories marked with a trailing ``/``."""
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path)
     if not resolved.is_dir():
         return FileOpResult(f"Not a directory: {resolved}", is_error=True)
 
@@ -245,97 +236,6 @@ def list_directory(
 
 
 # ---------------------------------------------------------------------------
-# Glob
-# ---------------------------------------------------------------------------
-
-
-def glob_files(
-    cwd: str,
-    pattern: str,
-    *,
-    limit: int = 100,
-) -> FileOpResult:
-    """Find files matching *pattern* relative to *cwd*."""
-    root = Path(cwd).resolve()
-    if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
-        return FileOpResult("glob pattern must stay inside workspace", is_error=True)
-
-    matches = glob_module.glob(str(root / pattern), recursive=True)
-    rels: list[str] = []
-    for match in sorted(matches):
-        mp = Path(match).resolve()
-        try:
-            rels.append(str(mp.relative_to(root)))
-        except ValueError:
-            continue
-        if len(rels) >= limit:
-            break
-    return FileOpResult("\n".join(rels) or "(no matches)")
-
-
-# ---------------------------------------------------------------------------
-# Directory tree (recursive, depth-limited)
-# ---------------------------------------------------------------------------
-
-
-def directory_tree(
-    cwd: str,
-    path: str = ".",
-    *,
-    max_depth: int = 3,
-    path_guard_enabled: bool = True,
-    exclude_patterns: tuple[str, ...] | None = None,
-) -> FileOpResult:
-    """Return a recursive tree view of files and directories.
-
-    *max_depth* limits recursion depth to avoid excessive output.
-    """
-    resolved = resolve_path(cwd, path, path_guard_enabled)
-    if not resolved.is_dir():
-        return FileOpResult(f"Not a directory: {resolved}", is_error=True)
-
-    exclude = set(exclude_patterns) if exclude_patterns else SKIP_DIRS
-
-    lines: list[str] = [f"{resolved.name}/"]
-    unreadable: list[str] = []
-    _walk_tree(resolved, resolved, "", max_depth, exclude, lines, unreadable)
-    if unreadable:
-        suffix = "directory" if len(unreadable) == 1 else "directories"
-        lines.append(
-            f"\n(skipped {len(unreadable)} unreadable {suffix}: {', '.join(unreadable[:3])})"
-        )
-    return FileOpResult("\n".join(lines))
-
-
-def _walk_tree(
-    root: Path,
-    current: Path,
-    prefix: str,
-    max_depth: int,
-    exclude: set[str],
-    lines: list[str],
-    unreadable: list[str],
-) -> None:
-    if max_depth <= 0:
-        return
-    try:
-        entries = sorted(current.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
-    except OSError as exc:
-        unreadable.append(f"{_relative_to(current, str(root))}: {exc.strerror or exc}")
-        return
-    for i, child in enumerate(entries):
-        if child.name in exclude:
-            continue
-        is_last = i == len(entries) - 1
-        connector = "└── " if is_last else "├── "
-        marker = "/" if child.is_dir() else ""
-        lines.append(f"{prefix}{connector}{child.name}{marker}")
-        if child.is_dir():
-            extension = "    " if is_last else "│   "
-            _walk_tree(root, child, prefix + extension, max_depth - 1, exclude, lines, unreadable)
-
-
-# ---------------------------------------------------------------------------
 # Grep / search
 # ---------------------------------------------------------------------------
 
@@ -347,7 +247,6 @@ def grep(
     path: str = ".",
     limit: int = 100,
     use_regex: bool = True,
-    path_guard_enabled: bool = True,
 ) -> FileOpResult:
     """Search file contents inside *path* (default: workspace root).
 
@@ -355,7 +254,7 @@ def grep(
     expression; otherwise a plain substring match is performed.
     """
     root = Path(cwd).resolve()
-    start = resolve_path(cwd, path, path_guard_enabled)
+    start = resolve_path(cwd, path)
 
     try:
         compiled = re.compile(pattern) if use_regex else None
@@ -386,42 +285,6 @@ def grep(
 
 
 # ---------------------------------------------------------------------------
-# File info / metadata
-# ---------------------------------------------------------------------------
-
-
-def get_file_info(
-    cwd: str,
-    path: str,
-    *,
-    path_guard_enabled: bool = True,
-) -> FileOpResult:
-    """Return detailed metadata about a file or directory."""
-    resolved = resolve_path(cwd, path, path_guard_enabled)
-    if not resolved.exists():
-        return FileOpResult(f"Path does not exist: {resolved}", is_error=True)
-
-    try:
-        stat = resolved.stat()
-    except OSError as exc:
-        return FileOpResult(f"Failed to stat {resolved}: {exc}", is_error=True)
-
-    kind = "directory" if resolved.is_dir() else "file"
-    size = stat.st_size
-    mtime = stat.st_mtime
-    rel = _relative_to(resolved, cwd)
-
-    info = (
-        f"Path: {rel}\n"
-        f"Type: {kind}\n"
-        f"Size: {_human_size(size)}\n"
-        f"Modified: {mtime:.0f}\n"
-        f"Permissions: {oct(stat.st_mode & 0o777)}"
-    )
-    return FileOpResult(info)
-
-
-# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -442,12 +305,3 @@ def _relative_to(path: Path, cwd: str) -> Path:
         return path.relative_to(Path(cwd).resolve())
     except ValueError:
         return path
-
-
-def _human_size(size: int) -> str:
-    """Format byte count as a human-readable string."""
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024:
-            return f"{size:.1f}{unit}" if isinstance(size, float) else f"{size}{unit}"
-        size /= 1024
-    return f"{size:.1f}TB"

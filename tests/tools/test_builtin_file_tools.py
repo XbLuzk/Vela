@@ -9,7 +9,7 @@ from vela.tools.base import Tool, ToolContext
 
 def _context(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.policy.approval_mode = "auto"
     return ToolContext(cwd=str(tmp_path), config=config)
 
@@ -25,7 +25,7 @@ def _run(tool: Tool, payload: dict, context: ToolContext):
 def test_workspace_tools_are_declared_with_matching_write_semantics():
     tools = {tool.name: tool for tool in get_builtin_tools()}
 
-    read_only_names = ("read_file", "list_dir", "glob", "grep", "directory_tree", "get_file_info")
+    read_only_names = ("read_file", "list_dir", "grep")
 
     assert set(read_only_names) <= set(tools)
     for name in read_only_names:
@@ -54,35 +54,18 @@ def test_edit_file_tool_edits_and_previews(tmp_path, monkeypatch):
     assert (tmp_path / "code.txt").read_text(encoding="utf-8") == "beta\n"
 
 
-def test_list_dir_glob_and_grep_tools_read_the_workspace(tmp_path, monkeypatch):
+def test_list_dir_and_grep_tools_read_the_workspace(tmp_path, monkeypatch):
     context = _context(tmp_path, monkeypatch)
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("needle = 1\n", encoding="utf-8")
 
     listed = _run(_tool("list_dir"), {"path": "."}, context)
-    globbed = _run(_tool("glob"), {"pattern": "**/*.py", "limit": 5}, context)
     grepped = _run(_tool("grep"), {"pattern": "needle", "path": "pkg"}, context)
     literal = _run(_tool("grep"), {"pattern": "needle = 1", "regex": False}, context)
 
     assert "pkg/" in listed.content
-    assert globbed.content == "pkg/a.py"
     assert "pkg/a.py:1: needle = 1" in grepped.content
     assert "pkg/a.py:1: needle = 1" in literal.content
-
-
-def test_directory_tree_and_file_info_tools_expose_metadata(tmp_path, monkeypatch):
-    context = _context(tmp_path, monkeypatch)
-    (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "a.py").write_text("x", encoding="utf-8")
-
-    tree = _run(_tool("directory_tree"), {"max_depth": 2}, context)
-    pruned = _run(_tool("directory_tree"), {"exclude_patterns": ["pkg"]}, context)
-    info = _run(_tool("get_file_info"), {"path": "pkg/a.py"}, context)
-
-    assert "pkg/" in tree.content
-    assert "a.py" in tree.content
-    assert "pkg" not in pruned.content
-    assert "Type: file" in info.content
 
 
 def test_write_file_reconciles_only_identical_non_append_content(tmp_path, monkeypatch):

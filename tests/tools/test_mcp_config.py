@@ -35,7 +35,7 @@ def test_project_config_overrides_user_config_and_can_be_excluded(tmp_path, monk
     assert user_only["shared"].command == "user-shared"
 
 
-def test_specs_accept_a_bare_server_mapping_and_skip_invalid_entries(tmp_path, monkeypatch):
+def test_specs_require_the_mcp_servers_wrapper(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".vela").mkdir(parents=True)
     (home / ".vela" / "mcp.json").write_text(
@@ -44,9 +44,11 @@ def test_specs_accept_a_bare_server_mapping_and_skip_invalid_entries(tmp_path, m
     )
     monkeypatch.setenv("HOME", str(home))
 
-    specs = load_mcp_server_specs(tmp_path / "project")
+    warnings: list[str] = []
+    specs = load_mcp_server_specs(tmp_path / "project", warnings=warnings)
 
-    assert set(specs) == {"good"}
+    assert specs == {}
+    assert any("mcpServers must be an object" in warning for warning in warnings)
 
 
 def test_missing_and_malformed_config_files_are_ignored(tmp_path, monkeypatch):
@@ -99,7 +101,7 @@ def test_stdio_spec_defaults_and_placeholder_expansion(tmp_path, monkeypatch):
     assert spec.url is None
 
 
-def test_url_servers_default_to_streamable_http_and_read_transport_aliases(tmp_path, monkeypatch):
+def test_url_servers_use_canonical_streamable_http_config(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".vela").mkdir(parents=True)
     (home / ".vela" / "mcp.json").write_text(
@@ -110,9 +112,9 @@ def test_url_servers_default_to_streamable_http_and_read_transport_aliases(tmp_p
                         "url": "https://example.com/mcp",
                         "headers": {"Authorization": "Bearer ${SECRET_TOKEN}"},
                         "enabled": False,
-                        "startup_timeout": 12,
+                        "timeout": 12,
                     },
-                    "aliased": {"transport": "sse", "url": "https://example.com/sse"},
+                    "unsupported": {"type": "websocket", "url": "https://example.com/socket"},
                     "zero-timeout": {"url": "https://example.com/mcp", "timeout": 0},
                 }
             }
@@ -122,14 +124,16 @@ def test_url_servers_default_to_streamable_http_and_read_transport_aliases(tmp_p
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SECRET_TOKEN", "token-value")
 
-    specs = load_mcp_server_specs(tmp_path / "project")
+    warnings: list[str] = []
+    specs = load_mcp_server_specs(tmp_path / "project", warnings=warnings)
 
     assert specs["remote"].type == "streamable_http"
     assert specs["remote"].headers == {"Authorization": "Bearer token-value"}
     assert specs["remote"].enabled is False
     assert specs["remote"].timeout == 12.0
-    assert specs["aliased"].type == "sse"
+    assert "unsupported" not in specs
     assert specs["zero-timeout"].timeout == 30.0
+    assert any("type must be stdio or streamable_http" in warning for warning in warnings)
 
 
 def test_write_chrome_devtools_config_defaults_to_the_user_scope(tmp_path, monkeypatch):

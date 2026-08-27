@@ -15,7 +15,7 @@ from vela.tools.process import stop_subprocess
 
 def test_read_write_file_tool(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.policy.approval_mode = "auto"
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
@@ -49,7 +49,7 @@ def test_builtin_tools_include_memory_recall_and_read_only_skills():
 
 
 def test_bash_tool_cancellation_stops_process_group(tmp_path, monkeypatch):
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     context = ToolContext(cwd=str(tmp_path), config=config)
     bash = next(tool for tool in get_builtin_tools() if tool.name == "bash")
     signals = []
@@ -135,7 +135,7 @@ def test_subprocess_stop_bounds_wait_after_sigkill(monkeypatch):
 
 def test_memory_tools_save_metadata_and_recall_relevant_items(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     context = ToolContext(cwd=str(tmp_path), config=config)
 
     saved = asyncio.run(
@@ -154,18 +154,3 @@ def test_memory_tools_save_metadata_and_recall_relevant_items(tmp_path, monkeypa
     assert not recalled.is_error
     assert "uv" in recalled.content
     assert "preference" in recalled.content
-
-
-def test_memory_tools_share_the_feature_switch(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
-    config.features.memory = False
-    context = ToolContext(cwd=str(tmp_path), config=config)
-
-    saved = asyncio.run(_save_memory({"content": "do not save"}, context))
-    recalled = asyncio.run(_search_memory({"query": "anything"}, context))
-
-    assert saved.is_error
-    assert recalled.is_error
-    assert saved.content == "Long-term memory is disabled."
-    assert recalled.content == "Long-term memory is disabled."

@@ -39,7 +39,7 @@ def test_selector_starts_on_active_model():
 
 
 def test_direct_model_argument_keeps_runtime_provider_switching(tmp_path):
-    config = load_config(project_root=tmp_path, env={})
+    config = load_config(env={})
 
     profile = _profile_from_argument("GLM glm-custom", config)
 
@@ -52,10 +52,28 @@ def test_direct_model_argument_keeps_runtime_provider_switching(tmp_path):
     )
 
 
+def test_direct_model_argument_keeps_custom_provider_base_url():
+    config = load_config(
+        overrides={
+            "llm": {
+                "provider": "custom",
+                "model": "private-model",
+                "base_url": "https://models.example.com/v1",
+            }
+        },
+        env={},
+    )
+
+    profile = _profile_from_argument("custom private-model-v2", config)
+
+    assert profile.provider == "custom"
+    assert profile.base_url == "https://models.example.com/v1"
+
+
 def test_activate_model_rebuilds_live_client_without_restart(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("ZAI_API_KEY", "glm-secret")
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     old_client = create_llm_client(config.llm)
     registry = SimpleNamespace(list_names=lambda: ["read_file"])
     agent = SimpleNamespace(
@@ -83,7 +101,6 @@ def test_activate_model_rebuilds_live_client_without_restart(tmp_path, monkeypat
 def test_glm_startup_uses_official_zai_api_key_and_context(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config = load_config(
-        project_root=tmp_path,
         env={
             "VELA_PROVIDER": "glm",
             "VELA_MODEL": "glm-5.2",
@@ -104,7 +121,6 @@ def test_glm_startup_uses_official_zai_api_key_and_context(tmp_path, monkeypatch
         ("deepseek", "deepseek-chat", "https://api.deepseek.com/v1", 1_000_000),
         ("openai", "gpt-4o", "https://api.openai.com/v1", 128_000),
         ("kimi", "moonshot-v1", "https://api.moonshot.cn/v1", 128_000),
-        ("custom", "private-model", "https://api.deepseek.com/v1", 64_000),
     ],
 )
 def test_llm_factory_preserves_provider_defaults(
@@ -114,7 +130,7 @@ def test_llm_factory_preserves_provider_defaults(
     expected_base_url,
     expected_context_window,
 ):
-    config = load_config(project_root=tmp_path, env={})
+    config = load_config(env={})
     config.llm.provider = provider
     config.llm.model = model
     config.llm.base_url = None
@@ -125,3 +141,12 @@ def test_llm_factory_preserves_provider_defaults(
     assert client.provider_name == provider
     assert client.base_url == expected_base_url
     assert client.max_context_window == expected_context_window
+
+
+def test_custom_provider_requires_explicit_base_url():
+    config = load_config(env={})
+    config.llm.provider = "custom"
+    config.llm.model = "private-model"
+
+    with pytest.raises(ValueError, match="requires an explicit base_url"):
+        create_llm_client(config.llm)

@@ -204,36 +204,30 @@ def test_submitted_input_uses_compact_history_format():
     assert str(rendered.style) == "on grey93"
 
 
-def test_approval_mode_toggle_never_disables_safety_guards(tmp_path):
-    config = load_config(project_root=tmp_path)
+def test_approval_mode_toggle_changes_only_approval_mode(tmp_path):
+    config = load_config()
     config.policy.approval_mode = "ask"
     controller = ApprovalModeController(config)
 
     assert controller.mode == "ask"
     assert config.policy.approval_mode == "ask"
-    assert config.policy.path_guard_enabled
-    assert config.policy.command_guard_enabled
 
     assert controller.toggle() == "auto"
     assert config.policy.approval_mode == "auto"
-    assert config.policy.path_guard_enabled
-    assert config.policy.command_guard_enabled
 
     assert controller.toggle() == "ask"
     assert config.policy.approval_mode == "ask"
-    assert config.policy.path_guard_enabled
-    assert config.policy.command_guard_enabled
 
 
 def test_shift_tab_is_bound_to_approval_mode_toggle(tmp_path):
-    controller = ApprovalModeController(load_config(project_root=tmp_path))
+    controller = ApprovalModeController(load_config())
     bindings = permission_key_bindings(controller)
 
     assert any(binding.keys == (Keys.BackTab,) for binding in bindings.bindings)
 
 
 def test_escape_is_bound_to_running_task_cancel(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     task_controller = InteractiveTaskController()
     bindings = permission_key_bindings(permission, task_controller)
 
@@ -241,7 +235,7 @@ def test_escape_is_bound_to_running_task_cancel(tmp_path):
 
 
 def test_running_task_keeps_draft_but_blocks_submit_until_completion(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     task_controller = InteractiveTaskController()
 
     async def run_prompt() -> tuple[bool, str, str]:
@@ -281,7 +275,7 @@ def test_running_task_keeps_draft_but_blocks_submit_until_completion(tmp_path):
 
 
 def test_running_task_blocks_enter_that_was_buffered_before_prompt_started(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     task_controller = InteractiveTaskController()
 
     async def run_prompt() -> tuple[bool, str]:
@@ -317,7 +311,7 @@ def test_running_task_blocks_enter_that_was_buffered_before_prompt_started(tmp_p
 
 
 def test_running_task_still_allows_cancel_command(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     task_controller = InteractiveTaskController()
 
     async def run_prompt() -> str:
@@ -347,7 +341,7 @@ def test_running_task_still_allows_cancel_command(tmp_path):
 
 
 def test_running_task_allows_tool_approval_response(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     task_controller = InteractiveTaskController()
     approval_result = ""
 
@@ -385,7 +379,7 @@ def test_running_task_allows_tool_approval_response(tmp_path):
 
 
 def test_running_task_allows_plan_review_response(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     task_controller = InteractiveTaskController()
 
     async def run_prompt() -> tuple[str, str]:
@@ -413,14 +407,14 @@ def test_running_task_allows_plan_review_response(tmp_path):
 
 
 def test_ctrl_v_is_bound_to_clipboard_image(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     bindings = permission_key_bindings(permission)
 
     assert any(binding.keys == (Keys.ControlV,) for binding in bindings.bindings)
 
 
 def test_ctrl_v_injects_image_reference_without_submitting(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     image_path = tmp_path / "screen shot.png"
 
     async def run_prompt() -> str:
@@ -443,7 +437,7 @@ def test_ctrl_v_injects_image_reference_without_submitting(tmp_path):
 
 
 def test_ctrl_v_failure_preserves_existing_input(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     console = Console(file=StringIO(), color_system=None)
 
     async def run_prompt() -> str:
@@ -475,7 +469,7 @@ def test_ctrl_v_failure_preserves_existing_input(tmp_path):
 
 
 def test_ctrl_v_capture_does_not_block_prompt_event_loop(tmp_path):
-    permission = ApprovalModeController(load_config(project_root=tmp_path))
+    permission = ApprovalModeController(load_config())
     image_path = tmp_path / "screen.png"
 
     def slow_grabber() -> ClipboardImageResult:
@@ -514,7 +508,7 @@ def test_ctrl_v_capture_does_not_block_prompt_event_loop(tmp_path):
 
 
 def test_shift_tab_input_toggles_live_approval_mode(tmp_path):
-    controller = ApprovalModeController(load_config(project_root=tmp_path))
+    controller = ApprovalModeController(load_config())
 
     async def run_prompt() -> None:
         with create_pipe_input() as pipe_input:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -22,30 +22,16 @@ if TYPE_CHECKING:
 
 
 async def run_agent_with_session(
-    agent: Agent,
-    renderer: RichRenderer,
     message: str,
-    active_session: ActiveSession,
-    console: Console,
-    task_controller: InteractiveTaskController | None = None,
+    runtime: ReplRuntime,
 ) -> None:
     """Run one ReAct request and always persist its final transcript."""
-    try:
-        await run_events(
-            agent.run(message),
-            renderer,
-            agent.llm_client.max_context_window,
-            task_controller,
-        )
-    except asyncio.CancelledError:
-        _finalize_cancelled(agent, renderer)
-        raise
-    except BaseException as exc:
-        _finalize_failed(agent, exc)
-        raise
-    finally:
-        active_session.save(agent.history, title=message)
-        print_session_warning(console, active_session)
+    await _run_with_session(
+        runtime.agent.run(message),
+        runtime,
+        runtime.renderer,
+        message,
+    )
 
 
 async def run_events(
@@ -111,7 +97,7 @@ async def run_events(
 
 def start_plan(arg: str, runtime: ReplRuntime) -> None:
     """Start a new Plan or resume the active session's interrupted Plan."""
-    resume_graph = arg in {"--resume", "resume", "继续"}
+    resume_graph = arg == "--resume"
     plan_agent = LangGraphPlanAgent(
         llm_client=runtime.agent.llm_client,
         tool_registry=runtime.registry,
@@ -122,13 +108,10 @@ def start_plan(arg: str, runtime: ReplRuntime) -> None:
         thread_id=runtime.active_session.current.id,
         resume=resume_graph,
     )
-    run = run_delegated_with_session(
+    run = _run_plan_with_session(
         plan_agent,
         "继续之前的计划" if resume_graph else arg,
-        runtime.agent,
-        runtime.active_session,
-        runtime.console,
-        runtime.task_controller,
+        runtime,
     )
     runtime.task_controller.start(
         run,
@@ -137,41 +120,62 @@ def start_plan(arg: str, runtime: ReplRuntime) -> None:
     )
 
 
-async def run_delegated_with_session(
+async def _run_plan_with_session(
     delegated_agent: LangGraphPlanAgent,
     message: str,
-    agent: Agent,
-    active_session: ActiveSession,
-    console: Console,
-    task_controller: InteractiveTaskController | None = None,
+    runtime: ReplRuntime,
 ) -> None:
     """Run a Plan agent while keeping the facade Agent history in sync."""
+    agent = runtime.agent
     previous_history = list(agent.history)
     agent.history = [*previous_history, Message(role="user", content=message)]
-    events: AsyncIterable[AgentEvent] = delegated_agent.run(message)
     run_renderer = RichRenderer()
+
+    def sync_history() -> None:
+        if delegated_agent.history:
+            agent.history = [*previous_history, *delegated_agent.history]
+
+    await _run_with_session(
+        delegated_agent.run(message),
+        runtime,
+        run_renderer,
+        message,
+        sync_history=sync_history,
+    )
+
+
+async def _run_with_session(
+    events: AsyncIterable[AgentEvent],
+    runtime: ReplRuntime,
+    renderer: RichRenderer,
+    message: str,
+    *,
+    sync_history: Callable[[], None] | None = None,
+) -> None:
+    """Render one task and persist its transcript on every exit path."""
+    agent = runtime.agent
     try:
         await run_events(
             events,
-            run_renderer,
+            renderer,
             agent.llm_client.max_context_window,
-            task_controller,
+            runtime.task_controller,
         )
-        if delegated_agent.history:
-            agent.history = [*previous_history, *delegated_agent.history]
+        if sync_history:
+            sync_history()
     except asyncio.CancelledError:
-        if delegated_agent.history:
-            agent.history = [*previous_history, *delegated_agent.history]
-        _finalize_cancelled(agent, run_renderer)
+        if sync_history:
+            sync_history()
+        _finalize_cancelled(agent, renderer)
         raise
     except BaseException as exc:
-        if delegated_agent.history:
-            agent.history = [*previous_history, *delegated_agent.history]
+        if sync_history:
+            sync_history()
         _finalize_failed(agent, exc)
         raise
     finally:
-        active_session.save(agent.history, title=message)
-        print_session_warning(console, active_session)
+        runtime.active_session.save(agent.history, title=message)
+        print_session_warning(runtime.console, runtime.active_session)
 
 
 def _finalize_cancelled(agent: Agent, renderer: RichRenderer) -> None:

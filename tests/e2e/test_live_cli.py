@@ -23,7 +23,6 @@ def test_real_model_react_cli(tmp_path: Path) -> None:
     result = _run_cli(
         tmp_path,
         "只回复 VELA_LIVE_OK，不要添加其他内容，也不要调用工具。",
-        mcp=False,
     )
 
     assert result["mode"] == "react"
@@ -77,7 +76,6 @@ if __name__ == "__main__":
     result = _run_cli(
         tmp_path,
         f"必须调用 mcp__live__echo，参数 text 必须是 {request_text}；然后只回复工具返回值。",
-        mcp=True,
         extra_env={
             "VELA_MCP_RESPONSE": response_text,
             "VELA_MCP_AUDIT": str(audit_path),
@@ -115,7 +113,6 @@ def test_real_model_uses_browser_mcp(tmp_path: Path) -> None:
         result = _run_cli(
             tmp_path,
             f"必须使用 Chrome DevTools MCP 打开 {url}；读取页面中的随机标记，然后只回复该标记。",
-            mcp=True,
             timeout=360,
         )
 
@@ -133,7 +130,6 @@ def test_real_model_executes_plan(tmp_path: Path) -> None:
         tmp_path,
         "制定并执行一个计划：读取 LIVE_PLAN_MARKER.txt，最终答案必须包含文件中的标记。",
         mode="plan",
-        mcp=False,
         timeout=360,
     )
 
@@ -146,11 +142,10 @@ def _run_cli(
     prompt: str,
     *,
     mode: str = "react",
-    mcp: bool,
     timeout: int = 240,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    config = load_config(project_root=workspace)
+    config = load_config()
     if not config.llm.api_key:
         pytest.fail("live acceptance requires VELA_API_KEY or a provider-specific API key")
 
@@ -164,10 +159,7 @@ def _run_cli(
             "VELA_API_KEY": config.llm.api_key,
             "VELA_PROVIDER": config.llm.provider,
             "VELA_MODEL": config.llm.model,
-            "VELA_HITL": "never",
-            "VELA_MCP": "true" if mcp else "false",
-            "VELA_MEMORY": "false",
-            "VELA_SKILL": "false",
+            "VELA_APPROVAL_MODE": "auto",
         }
     )
     if config.llm.base_url:

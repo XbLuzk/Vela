@@ -311,7 +311,7 @@ async def _collect(events):
 def test_agent_executes_tool_and_replays_result(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "note.txt").write_text("hello\n", encoding="utf-8")
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
@@ -333,9 +333,8 @@ def test_agent_executes_tool_and_replays_result(tmp_path, monkeypatch):
 def test_react_loop_preserves_stream_event_order(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "note.txt").write_text("hello\n", encoding="utf-8")
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
     agent = Agent(
@@ -379,7 +378,7 @@ def test_load_skill_is_injected_in_the_same_query_next_model_turn(tmp_path, monk
         "tags: [demo]\n---\nApply the demo workflow now.\n",
         encoding="utf-8",
     )
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
@@ -405,7 +404,7 @@ def test_load_skill_is_injected_in_the_same_query_next_model_turn(tmp_path, monk
 
 def test_runtime_integrates_context_compression_and_detailed_usage(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
     config.llm.max_tokens = 100
     client = UsageAndCompressionClient()
@@ -440,9 +439,8 @@ def test_runtime_integrates_context_compression_and_detailed_usage(tmp_path, mon
 
 def test_react_runtime_keeps_one_model_call_and_vela_stream_events(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     client = SingleTurnStreamingClient()
     agent = Agent(
         llm_client=client,
@@ -473,9 +471,8 @@ def test_react_runtime_keeps_one_model_call_and_vela_stream_events(tmp_path, mon
 
 def test_direct_react_runtime_returns_complete_transcript(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
 
     async def run():
         events = []
@@ -500,9 +497,8 @@ def test_direct_react_runtime_returns_complete_transcript(tmp_path, monkeypatch)
 
 def test_react_runtime_preserves_parallel_reads_and_serial_write(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     config.policy.approval_mode = "auto"
     both_reads_started = asyncio.Event()
     release_reads = asyncio.Event()
@@ -584,9 +580,8 @@ def test_closing_after_first_tool_result_cancels_pending_concurrent_tool(tmp_pat
                 }
             yield {"type": "message_end", "stop_reason": "tool_use"}
 
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     slow_started = asyncio.Event()
     slow_cancelled = asyncio.Event()
 
@@ -638,9 +633,8 @@ def test_react_runtime_forwards_hitl_approval(
     expected_result,
 ):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     config.policy.approval_mode = "ask"
     approvals = []
     executions = 0
@@ -690,9 +684,8 @@ def test_react_runtime_forwards_hitl_approval(
 
 def test_unknown_tool_with_malformed_input_returns_error_and_model_recovers(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     agent = Agent(
         llm_client=ToolResultClient(
             "missing_tool",
@@ -718,9 +711,8 @@ def test_unknown_tool_with_malformed_input_returns_error_and_model_recovers(tmp_
 def test_split_tool_name_fragments_are_reassembled(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "note.txt").write_text("hello\n", encoding="utf-8")
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
     client = SplitToolNameClient(
@@ -737,9 +729,8 @@ def test_split_tool_name_fragments_are_reassembled(tmp_path, monkeypatch):
 
 def test_ambiguous_unindexed_tool_fragment_fails_before_writes(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     config.policy.approval_mode = "auto"
     executions = []
 
@@ -773,9 +764,8 @@ def test_ambiguous_unindexed_tool_fragment_fails_before_writes(tmp_path, monkeyp
 
 def test_duplicate_id_repeat_fails_before_extra_write(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     config.policy.approval_mode = "auto"
     executions = []
 
@@ -809,9 +799,8 @@ def test_duplicate_id_repeat_fails_before_extra_write(tmp_path, monkeypatch):
 
 def test_incomplete_tool_stream_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     agent = Agent(
         llm_client=IncompleteToolClient(),
         tool_registry=ToolRegistry(),
@@ -825,9 +814,8 @@ def test_incomplete_tool_stream_fails_closed(tmp_path, monkeypatch):
 
 def test_completed_tool_result_is_persisted_before_event_delivery(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     config.policy.approval_mode = "auto"
 
     async def write(payload, context):  # noqa: ARG001
@@ -866,9 +854,8 @@ def test_completed_tool_result_is_persisted_before_event_delivery(tmp_path, monk
 
 def test_duplicate_tool_call_ids_do_not_deadlock_serial_execution(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     config.policy.approval_mode = "auto"
     order: list[str] = []
 
@@ -904,9 +891,8 @@ def test_duplicate_tool_call_ids_do_not_deadlock_serial_execution(tmp_path, monk
 
 def test_react_loop_fails_explicitly_at_the_model_turn_limit(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     config.policy.approval_mode = "auto"
     calls: list[str] = []
 
@@ -955,9 +941,8 @@ def test_react_loop_fails_explicitly_at_the_model_turn_limit(tmp_path, monkeypat
 @pytest.mark.parametrize("max_turns", [0, -1])
 def test_react_loop_rejects_non_positive_turn_limits(tmp_path, monkeypatch, max_turns):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.context_compression = False
     client = SingleTurnStreamingClient()
     with pytest.raises(ValueError, match="max_turns must be at least 1"):
         Agent(
@@ -1008,9 +993,8 @@ def test_context_overflow_compacts_and_retries_the_same_model_turn(tmp_path, mon
             yield {"type": "message_end", "stop_reason": "end_turn"}
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.skill = False
     client = OverflowOnceClient()
     agent = Agent(
         llm_client=client,
@@ -1054,9 +1038,8 @@ def test_context_overflow_is_retried_only_once_per_model_turn(tmp_path, monkeypa
             yield {"type": "error", "error": ContextOverflowError("provider overflow")}
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.skill = False
     client = OverflowTwiceClient()
     agent = Agent(
         llm_client=client,
@@ -1087,9 +1070,8 @@ def test_context_overflow_without_an_old_complete_turn_fails_without_tools(tmp_p
             yield {"type": "error", "error": ContextOverflowError("provider overflow")}
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.llm.api_key = "test-key"
-    config.features.skill = False
     agent = Agent(
         llm_client=OverflowClient(),
         tool_registry=ToolRegistry(),

@@ -27,7 +27,7 @@ def test_cancelled_plan_task_retains_incremental_tool_transcript(tmp_path, monke
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     second_started = asyncio.Event()
     registry = _two_tool_registry(second_started)
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.policy.approval_mode = "auto"
     agent = LangGraphPlanAgent(
         llm_client=TwoToolClient(),
@@ -60,7 +60,7 @@ def test_cancelled_graph_resumes_from_last_completed_batch(tmp_path, monkeypatch
     first_agent = LangGraphPlanAgent(
         llm_client=first_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         thread_id=thread_id,
         checkpoint_path=checkpoint_path,
@@ -79,7 +79,7 @@ def test_cancelled_graph_resumes_from_last_completed_batch(tmp_path, monkeypatch
     resumed_agent = LangGraphPlanAgent(
         llm_client=resumed_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         thread_id=thread_id,
         checkpoint_path=checkpoint_path,
@@ -113,7 +113,7 @@ def test_parallel_resume_keeps_successful_pending_write(tmp_path, monkeypatch):
     first_agent = LangGraphPlanAgent(
         llm_client=first_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         thread_id=thread_id,
         checkpoint_path=checkpoint_path,
@@ -140,7 +140,7 @@ def test_parallel_resume_keeps_successful_pending_write(tmp_path, monkeypatch):
     resumed_agent = LangGraphPlanAgent(
         llm_client=resumed_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         thread_id=thread_id,
         checkpoint_path=checkpoint_path,
@@ -170,7 +170,7 @@ def test_plan_review_interrupt_resumes_from_persisted_checkpoint(tmp_path, monke
     first_agent = LangGraphPlanAgent(
         llm_client=first_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         plan_review_callback=blocked_review,
         thread_id=thread_id,
@@ -190,7 +190,7 @@ def test_plan_review_interrupt_resumes_from_persisted_checkpoint(tmp_path, monke
     resumed_agent = LangGraphPlanAgent(
         llm_client=resumed_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         plan_review_callback=lambda _plan: PlanReviewDecision.execute(),
         thread_id=thread_id,
@@ -220,7 +220,7 @@ def test_plan_review_resume_without_callback_fails_closed(tmp_path, monkeypatch)
     first_agent = LangGraphPlanAgent(
         llm_client=first_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         plan_review_callback=blocked_review,
         thread_id=thread_id,
@@ -240,7 +240,7 @@ def test_plan_review_resume_without_callback_fails_closed(tmp_path, monkeypatch)
     resumed_agent = LangGraphPlanAgent(
         llm_client=resumed_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         thread_id=thread_id,
         checkpoint_path=checkpoint_path,
@@ -261,7 +261,7 @@ def test_fresh_plan_replaces_completed_state_for_same_thread(tmp_path, monkeypat
     first_agent = LangGraphPlanAgent(
         llm_client=first_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         thread_id=thread_id,
         checkpoint_path=checkpoint_path,
@@ -272,7 +272,7 @@ def test_fresh_plan_replaces_completed_state_for_same_thread(tmp_path, monkeypat
     second_agent = LangGraphPlanAgent(
         llm_client=second_client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
         thread_id=thread_id,
         checkpoint_path=checkpoint_path,
@@ -294,7 +294,7 @@ def test_failed_task_sets_graph_failed_terminal_state(tmp_path, monkeypatch):
     agent = LangGraphPlanAgent(
         llm_client=client,
         tool_registry=ToolRegistry(),
-        config=load_config(project_root=tmp_path),
+        config=load_config(),
         cwd=str(tmp_path),
     )
 
@@ -336,7 +336,7 @@ def test_plan_resume_replays_completed_tool_and_retries_only_uncertain_call(tmp_
             )
         )
 
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.policy.approval_mode = "auto"
     config.tools.execution_journal_path = str(tmp_path / "tool-executions.sqlite")
     first_agent = LangGraphPlanAgent(
@@ -393,7 +393,7 @@ def test_one_shot_plan_does_not_create_orphan_tool_journal(tmp_path, monkeypatch
                 is_concurrency_safe=False,
             )
         )
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     config.policy.approval_mode = "auto"
     journal_path = tmp_path / "tool-executions.sqlite"
     config.tools.execution_journal_path = str(journal_path)
@@ -412,7 +412,7 @@ def test_one_shot_plan_does_not_create_orphan_tool_journal(tmp_path, monkeypatch
 
 def test_journal_cleanup_failure_is_reported_in_done_event(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    config = load_config(project_root=tmp_path)
+    config = load_config()
     journal_path = tmp_path / "tool-executions.sqlite"
     journal_path.write_bytes(b"")
     config.tools.execution_journal_path = str(journal_path)

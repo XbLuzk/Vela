@@ -10,15 +10,12 @@ from vela.tools import file_ops as fops
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_path_enforces_guard_and_can_opt_out(tmp_path):
+def test_resolve_path_always_enforces_workspace_guard(tmp_path):
     with pytest.raises(PathPolicyError):
         fops.resolve_path(str(tmp_path), "../outside.txt")
 
-    escaped = fops.resolve_path(str(tmp_path), "../outside.txt", path_guard_enabled=False)
-    assert escaped.resolve() == tmp_path.resolve().parent / "outside.txt"
-
     absolute = tmp_path / "abs.txt"
-    assert fops.resolve_path(str(tmp_path), str(absolute), path_guard_enabled=False) == absolute
+    assert fops.resolve_path(str(tmp_path), str(absolute)) == absolute
 
 
 def test_skip_file_ignores_skipped_dirs_oversized_and_missing_files(tmp_path):
@@ -224,7 +221,7 @@ def test_build_diff_summary_switches_to_counts_for_large_edits():
 
 
 # ---------------------------------------------------------------------------
-# Listing, glob, tree
+# Listing
 # ---------------------------------------------------------------------------
 
 
@@ -253,84 +250,6 @@ def test_list_directory_reports_iteration_errors(tmp_path, monkeypatch):
 
     assert result.is_error
     assert "Failed to list" in result.content
-
-
-def test_glob_files_returns_relative_matches_within_limit(tmp_path):
-    (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "a.py").write_text("a", encoding="utf-8")
-    (tmp_path / "pkg" / "b.py").write_text("b", encoding="utf-8")
-    (tmp_path / "pkg" / "c.txt").write_text("c", encoding="utf-8")
-
-    matched = fops.glob_files(str(tmp_path), "**/*.py")
-    limited = fops.glob_files(str(tmp_path), "**/*.py", limit=1)
-    empty = fops.glob_files(str(tmp_path), "**/*.rs")
-
-    assert matched.content == "pkg/a.py\npkg/b.py"
-    assert limited.content == "pkg/a.py"
-    assert empty.content == "(no matches)"
-
-
-def test_glob_files_rejects_patterns_leaving_the_workspace(tmp_path):
-    absolute = fops.glob_files(str(tmp_path), "/etc/*.conf")
-    parent = fops.glob_files(str(tmp_path), "../*.py")
-
-    assert absolute.is_error
-    assert parent.is_error
-    assert "must stay inside workspace" in absolute.content
-
-
-def test_glob_files_skips_symlinks_resolving_outside_the_workspace(tmp_path):
-    root = tmp_path / "root"
-    root.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "external.py").write_text("x", encoding="utf-8")
-    (root / "inside.py").write_text("x", encoding="utf-8")
-    (root / "linked.py").symlink_to(outside / "external.py")
-
-    result = fops.glob_files(str(root), "*.py")
-
-    assert result.content == "inside.py"
-
-
-def test_directory_tree_respects_depth_and_exclusions(tmp_path):
-    (tmp_path / "src" / "deep").mkdir(parents=True)
-    (tmp_path / "src" / "deep" / "buried.py").write_text("x", encoding="utf-8")
-    (tmp_path / "src" / "top.py").write_text("x", encoding="utf-8")
-    (tmp_path / "node_modules").mkdir()
-    (tmp_path / "node_modules" / "dep.js").write_text("x", encoding="utf-8")
-
-    default = fops.directory_tree(str(tmp_path))
-    shallow = fops.directory_tree(str(tmp_path), max_depth=1)
-    custom_exclude = fops.directory_tree(str(tmp_path), exclude_patterns=("src",))
-    not_a_dir = fops.directory_tree(str(tmp_path), "src/top.py")
-
-    assert default.content.startswith(f"{tmp_path.name}/")
-    assert "node_modules" not in default.content
-    assert "buried.py" in default.content
-    assert "src/" in shallow.content
-    assert "deep/" not in shallow.content
-    assert "src" not in custom_exclude.content
-    assert "node_modules/" in custom_exclude.content
-    assert not_a_dir.is_error
-    assert "Not a directory" in not_a_dir.content
-
-
-def test_directory_tree_ignores_unreadable_directories(tmp_path, monkeypatch):
-    root = tmp_path / "root"
-    root.mkdir()
-    real_iterdir = type(root).iterdir
-
-    def guarded_iterdir(self):
-        if self == root:
-            raise OSError("permission denied")
-        return real_iterdir(self)
-
-    monkeypatch.setattr("pathlib.Path.iterdir", guarded_iterdir)
-    result = fops.directory_tree(str(tmp_path), "root")
-
-    assert not result.is_error
-    assert result.content == "root/\n\n(skipped 1 unreadable directory: .: permission denied)"
 
 
 # ---------------------------------------------------------------------------
@@ -392,48 +311,8 @@ def test_grep_skips_files_inside_skipped_directories(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# File info and helpers
+# Helpers
 # ---------------------------------------------------------------------------
-
-
-def test_get_file_info_describes_files_and_directories(tmp_path):
-    target = tmp_path / "a.txt"
-    target.write_text("hello", encoding="utf-8")
-
-    file_info = fops.get_file_info(str(tmp_path), "a.txt")
-    dir_info = fops.get_file_info(str(tmp_path), ".")
-    missing = fops.get_file_info(str(tmp_path), "nope.txt")
-
-    assert "Path: a.txt" in file_info.content
-    assert "Type: file" in file_info.content
-    assert "Size: 5B" in file_info.content
-    assert "Permissions: 0o" in file_info.content
-    assert "Type: directory" in dir_info.content
-    assert missing.is_error
-    assert "Path does not exist" in missing.content
-
-
-def test_get_file_info_reports_stat_errors(tmp_path, monkeypatch):
-    (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
-    real_stat = type(tmp_path).stat
-    real_exists = type(tmp_path).exists
-
-    def guarded_stat(self, *args, **kwargs):
-        if self.name == "a.txt":
-            raise OSError("stale handle")
-        return real_stat(self, *args, **kwargs)
-
-    def guarded_exists(self, *args, **kwargs):
-        if self.name == "a.txt":
-            return True
-        return real_exists(self, *args, **kwargs)
-
-    monkeypatch.setattr("pathlib.Path.stat", guarded_stat)
-    monkeypatch.setattr("pathlib.Path.exists", guarded_exists)
-    result = fops.get_file_info(str(tmp_path), "a.txt")
-
-    assert result.is_error
-    assert "Failed to stat" in result.content
 
 
 def test_relative_to_falls_back_to_absolute_path(tmp_path):
@@ -441,17 +320,3 @@ def test_relative_to_falls_back_to_absolute_path(tmp_path):
 
     assert fops._relative_to(tmp_path / "inside.txt", str(tmp_path)).as_posix() == "inside.txt"
     assert fops._relative_to(outside, str(tmp_path)) == outside
-
-
-@pytest.mark.parametrize(
-    ("size", "expected"),
-    [
-        (12, "12B"),
-        (2048, "2.0KB"),
-        (5 * 1024 * 1024, "5.0MB"),
-        (3 * 1024**3, "3.0GB"),
-        (2 * 1024**4, "2.0TB"),
-    ],
-)
-def test_human_size_formats_each_unit(size, expected):
-    assert fops._human_size(size) == expected

@@ -29,6 +29,7 @@ from vela.entrypoints.repl_ui import (
     user_history_message,
 )
 from vela.llm import create_llm_client
+from vela.mcp import McpClientManager
 from vela.render import RichRenderer
 from vela.session import ActiveSession
 from vela.storage import user_state_path
@@ -49,7 +50,7 @@ class ReplRuntime:
     renderer: RichRenderer
     active_session: ActiveSession
     task_controller: InteractiveTaskController
-    mcp_manager: Any = None
+    mcp_manager: McpClientManager
 
 
 # Startup ---------------------------------------------------------------------
@@ -222,14 +223,7 @@ async def _dispatch_message(
         return await handle_slash(message, runtime)
 
     controller.start(
-        run_agent_with_session(
-            runtime.agent,
-            runtime.renderer,
-            message,
-            runtime.active_session,
-            runtime.console,
-            controller,
-        ),
+        run_agent_with_session(message, runtime),
         initial_state=TaskState.RUNNING,
         label=message,
     )
@@ -257,10 +251,8 @@ async def _approval_prompt(
     return answer
 
 
-def _report_mcp_problems(console: Console, manager: Any) -> None:
+def _report_mcp_problems(console: Console, manager: McpClientManager) -> None:
     """Show MCP config and startup failures that would otherwise be invisible here."""
-    if manager is None:
-        return
     for warning in getattr(manager, "config_warnings", []) or []:
         console.print(f"[yellow]{warning}[/yellow]")
     for name, error in (getattr(manager, "last_errors", None) or {}).items():

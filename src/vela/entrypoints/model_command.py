@@ -6,9 +6,9 @@ from vela.agent import Agent
 from vela.config import VelaConfig
 from vela.entrypoints.model_selector import ModelSelectorState, run_model_selector
 from vela.llm import create_llm_client
-from vela.llm.factory import DEEPSEEK_BASE_URL, OPENAI_BASE_URL, PROVIDER_BASE_URLS
 from vela.llm.model_profiles import DEFAULT_MODEL_PROFILES, ModelProfile
 from vela.prompt import PromptAssembler
+from vela.providers import provider_spec
 from vela.render import RichRenderer
 
 
@@ -86,7 +86,7 @@ def _profile_from_argument(arg: str, config: VelaConfig) -> ModelProfile:
 
     base_url = (
         config.llm.base_url
-        if len(parts) == 1 and config.llm.base_url
+        if provider == config.llm.provider.lower() and config.llm.base_url
         else _default_base_url(provider)
     )
     return ModelProfile(
@@ -100,7 +100,7 @@ def _profile_from_argument(arg: str, config: VelaConfig) -> ModelProfile:
 
 
 def _default_base_url(provider: str) -> str:
-    normalized = provider.lower()
-    if normalized == "deepseek":
-        return DEEPSEEK_BASE_URL
-    return PROVIDER_BASE_URLS.get(normalized, OPENAI_BASE_URL)
+    spec = provider_spec(provider)
+    if spec is None:
+        raise ValueError(f"Unknown provider {provider!r}; configure its base_url first")
+    return spec.base_url

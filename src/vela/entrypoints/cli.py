@@ -84,7 +84,7 @@ def _resolve_cli_project_trust(
         override=None,
         store=trust_store,
         prompt=lambda path: typer.confirm(
-            f"Trust project {path}? This enables its .env, Vela config, MCP servers, and Skills",
+            f"Trust project {path}? This enables its instructions, MCP servers, and Skills",
             default=False,
         ),
     )
@@ -138,7 +138,7 @@ def main(
         bool | None,
         typer.Option(
             "--trust-project/--no-trust-project",
-            help="Allow or ignore project-local config, MCP servers, and Skills for this run",
+            help="Allow or ignore project instructions, MCP servers, and Skills for this run",
         ),
     ] = None,
     # --- Version ---
@@ -183,9 +183,8 @@ def main(
         overrides["llm"] = llm_overrides
     config_warnings: list[str] = []
     config = load_config(
-        project_root=root,
         overrides=overrides,
-        include_project=project_trusted,
+        project_trusted=project_trusted,
         warnings=config_warnings,
     )
     for warning in config_warnings:
@@ -222,8 +221,7 @@ def doctor(
     project_trusted = _resolve_cli_project_trust(root, interactive=False, override=None)
     config_warnings: list[str] = []
     config = load_config(
-        project_root=root,
-        include_project=project_trusted,
+        project_trusted=project_trusted,
         warnings=config_warnings,
     )
     mcp_warnings: list[str] = []
@@ -239,9 +237,7 @@ def doctor(
         "model": config.llm.model,
         "cwd": str(root),
         "project_trusted": project_trusted,
-        "config_paths": [
-            str(path) for path in get_config_paths(root, include_project=project_trusted)
-        ],
+        "config_paths": [str(path) for path in get_config_paths()],
         "config_warnings": config_warnings + mcp_warnings,
     }
     console.print_json(json.dumps(checks, ensure_ascii=False))
@@ -315,12 +311,12 @@ async def _run_prompt(
         typer.echo(
             "Fatal error: LLM API key is not configured. Set it with --api-key, "
             "via the VELA_API_KEY environment variable, or in "
-            "~/.vela/config.json or .vela/config.json.",
+            "~/.vela/config.json.",
             err=True,
         )
         raise typer.Exit(1)
     registry, manager = await build_tool_registry(config=config, cwd=cwd)
-    if manager and manager.last_errors:
+    if manager.last_errors:
         for name, error in manager.last_errors.items():
             typer.echo(f"MCP server {name} failed to load: {error}", err=True)
     agent = Agent(
