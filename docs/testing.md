@@ -17,21 +17,10 @@ uv build
 
 ## 2. 确定性集成测试
 
-普通 pytest 已覆盖真实 SQLite、LangGraph Checkpoint、stdio MCP 子进程、工具取消、执行日志、
-Plan 恢复、Session 持久化、分层 Run Trace、Context Engine、Agent Eval 和 Code RAG MCP。Code RAG
-测试会启动真实 stdio MCP 子进程；Run Trace 会验证完成、错误、取消、Span 父子关系、提前停止消费、
-损坏 JSONL 行、Run ID/Audit 关联与敏感异常脱敏。项目 Trust、运行中消息拒绝、上下文溢出恢复也
-使用受控边界测试，保证错误和恢复场景可以稳定复现。
-
-固定 Agent 任务基线可以单独运行，并将结果保存为可比较 JSON：
-
-```bash
-uv run vela eval run --output eval-results/current.json
-uv run vela eval compare eval-results/baseline.json eval-results/current.json
-```
-
-自定义任务文件会驱动 Agent 工具并执行断言命令，因此需要先审查，再传入
-`--allow-code-execution`。
+普通 pytest 已覆盖真实 SQLite、LangGraph Checkpoint、stdio MCP 子进程、工具取消、Plan 写工具
+Journal、Plan 恢复、Session 持久化、Context Engine 和 Code RAG MCP。Code RAG 测试会启动真实
+stdio MCP 子进程。项目 Trust、运行中消息拒绝、上下文溢出恢复、审批模式和安全守卫也使用受控
+边界测试，保证错误和恢复场景可以稳定复现。
 
 ## 3. Live E2E
 
