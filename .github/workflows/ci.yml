@@ -108,4 +108,4 @@ jobs:
           .wheel-smoke/bin/vela --version
           .wheel-smoke/bin/vela --help > /dev/null
           test ! -e .wheel-smoke/bin/vela-rag
-          .wheel-smoke/bin/python -m vela_rag.server --help > /dev/null
+          ! .wheel-smoke/bin/python -m vela_rag.server --help > /dev/null 2>&1
