@@ -58,7 +58,6 @@
 - `src/vela/session.py`：保存和恢复项目对话。
 - `src/vela/tools/journal.py`：记录 Plan 的有副作用工具，避免恢复时重复执行。
 - `src/vela/context/manager.py::ContextEngine.prepare`：计算预算、裁剪工具结果、压缩旧历史。
-- `src/vela_rag/server.py`：暴露内置 Code RAG MCP Tool；索引位于 `src/vela_rag/index.py`。
 - `src/vela/trust.py`：在加载项目指令、MCP 与 Skill 前处理项目 Trust。
 
 ## 6. 推荐节奏

@@ -40,7 +40,7 @@ package = true
 constraint-dependencies = ["cryptography>=50.0.0"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/vela", "src/vela_rag"]
+packages = ["src/vela"]
 
 [tool.hatch.build.targets.sdist]
 include = [

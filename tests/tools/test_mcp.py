@@ -147,14 +147,6 @@ def test_untrusted_mcp_loading_keeps_user_servers_and_ignores_project(tmp_path, 
     assert set(specs) == {"user"}
 
 
-def test_untrusted_mcp_manager_does_not_register_builtin_code_rag(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-
-    manager = McpClientManager(tmp_path, include_project=False)
-
-    assert "code-rag" not in manager.specs
-
-
 def test_generated_mcp_config_is_owner_only(tmp_path):
     path = write_chrome_devtools_config(scope_root=tmp_path)
 

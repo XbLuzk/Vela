@@ -11,7 +11,7 @@ uv run --frozen pytest
 uv build
 ```
 
-这一层不读取 API Key，也不访问真实模型。它覆盖 Agent、LangGraph、Session、Context、MCP/RAG、
+这一层不读取 API Key，也不访问真实模型。它覆盖 Agent、LangGraph、Session、Context、MCP、
 Memory、Skill、安全守卫、Web API 和本地 launcher。
 
 ## 2. 前端

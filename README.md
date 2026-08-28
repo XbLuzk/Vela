@@ -15,7 +15,7 @@ Vela 在浏览器中提供一个安静的本地工作区：左侧是 Session，�
 与工具详情默认折叠，不再把终端状态行重复写进历史记录。
 
 Agent 仍由 Python 负责。普通任务运行显式 ReAct 循环；复杂任务使用 LangGraph Plan DAG；两者
-复用模型客户端、工具、安全策略、Session、Context、Memory、Skill、MCP 和内置 Code RAG。
+复用模型客户端、工具、安全策略、Session、Context、Memory、Skill 和 MCP。
 React 前端只消费事件和提交用户操作，不复制 Agent 业务逻辑。
 
 ## 快速开始
@@ -71,7 +71,6 @@ uv run vela --version
 | Context | 工具结果裁剪、旧历史压缩和一次溢出恢复 |
 | 工具安全 | 项目 Trust、Ask/Auto 审批、PathGuard、CommandGuard |
 | 扩展 | MCP、Memory、只读 Skill 和多模态输入 |
-| Code RAG | 本地 SQLite FTS 增量索引，可选语义混合检索 |
 
 Vela 不保留 Run Trace、Eval、Audit、终端 REPL、Rich renderer 或 Prompt Toolkit UI。
 
@@ -99,7 +98,7 @@ Vela 不保留 Run Trace、Eval、Audit、终端 REPL、Rich renderer 或 Prompt
 | `STEP_API_KEY` | Step Key |
 | `KIMI_API_KEY` | Kimi Key |
 
-## MCP 与 Code RAG
+## MCP
 
 Vela 读取用户级 `~/.vela/mcp.json` 和可信项目的 `.vela/mcp.json`，支持 stdio 与 Streamable
 HTTP MCP。远程工具注册名为 `mcp__<server>__<tool>`。stdio MCP 不会默认继承 Vela 的模型密钥；
@@ -116,11 +115,6 @@ HTTP MCP。远程工具注册名为 `mcp__<server>__<tool>`。stdio MCP 不会�
   }
 }
 ```
-
-Code RAG 是可信项目的内置能力。第一次搜索自动创建索引，后续只增量更新变化文件；默认使用本地
-SQLite FTS，不会把源码发送给 Embedding Provider。语义混合检索可通过
-`VELA_RAG_EMBEDDING_API_KEY`、`VELA_RAG_EMBEDDING_MODEL` 和可选的
-`VELA_RAG_EMBEDDING_BASE_URL` 启用。
 
 ## 代码阅读路线
 
