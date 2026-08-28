@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from vela.task_control import (
     PlanReviewAction,
     TaskController,
@@ -158,6 +160,33 @@ def test_controller_collects_async_tool_approval():
     assert decisions == ["auto"]
 
 
+@pytest.mark.parametrize(
+    ("wire_value", "expected"),
+    (("approve", "approve"), ("deny", "deny"), ("skip", "skip")),
+)
+def test_controller_accepts_web_tool_approval_values(wire_value: str, expected: str):
+    controller = TaskController()
+    decisions: list[str] = []
+
+    async def work():
+        decisions.append(await controller.request_approval({"tool_name": "bash"}))
+
+    async def run():
+        controller.start(work(), initial_state=TaskState.RUNNING, label="web approval")
+        await _wait_until(lambda: controller.awaiting_approval)
+        message = controller.submit_approval(wire_value)
+        still_pending = controller.awaiting_approval
+        if still_pending:
+            controller.request_cancel()
+        await controller.wait()
+        return message, still_pending
+
+    message, still_pending = asyncio.run(run())
+
+    assert not still_pending, message
+    assert decisions == [expected]
+
+
 def test_controller_queues_parallel_tool_approvals_fifo():
     controller = TaskController()
     decisions: list[tuple[str, str]] = []
@@ -172,8 +201,14 @@ def test_controller_queues_parallel_tool_approvals_fifo():
     async def run():
         controller.start(work(), initial_state=TaskState.RUNNING, label="parallel approvals")
         await _wait_until(lambda: controller.approval_request == {"tool_name": "first"})
+        first_approval_id = controller.approval_id
+        assert first_approval_id is not None
+        assert controller.pending_approval_count == 2
         assert "已允许" in controller.submit_approval("y")
         await _wait_until(lambda: controller.approval_request == {"tool_name": "second"})
+        assert controller.approval_id is not None
+        assert controller.approval_id > first_approval_id
+        assert controller.pending_approval_count == 1
         assert "已拒绝" in controller.submit_approval("n")
         await controller.wait()
 
@@ -182,6 +217,8 @@ def test_controller_queues_parallel_tool_approvals_fifo():
     assert decisions == [("first", "approve"), ("second", "deny")]
     assert controller.state == TaskState.COMPLETED
     assert not controller.awaiting_approval
+    assert controller.approval_id is None
+    assert controller.pending_approval_count == 0
 
 
 def test_controller_cancels_all_queued_tool_approvals():

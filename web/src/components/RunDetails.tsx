@@ -3,13 +3,31 @@ import type { LiveRun } from "../types";
 export function RunDetails({ run }: { run: LiveRun }) {
   if (!run.thinking && run.tools.length === 0 && run.plan.length === 0) return null;
 
+  const completed = run.plan.filter((task) => task.status === "completed").length;
+  const routeLabel = run.status === "running"
+    ? "Working"
+    : run.status === "completed"
+      ? "Completed"
+      : run.status === "cancelled"
+        ? "Stopped"
+        : "Failed";
+  const routeSummary = [
+    run.plan.length ? `${completed}/${run.plan.length} steps` : null,
+    run.tools.length ? `${run.tools.length} tool${run.tools.length === 1 ? "" : "s"}` : null,
+  ].filter(Boolean).join(" · ");
+
   return (
-    <div className="run-details">
+    <div className={`run-details run-${run.status}`}>
+      <div className="run-route">
+        <span className="route-node" aria-hidden="true" />
+        <strong>{routeLabel}</strong>
+        {routeSummary ? <small>{routeSummary}</small> : null}
+      </div>
       {run.plan.length > 0 ? (
-        <details open className="detail-block plan-block">
+        <details className="detail-block plan-block">
           <summary>
-            <span>计划</span>
-            <small>{run.plan.filter((task) => task.status === "completed").length}/{run.plan.length}</small>
+            <span>Plan</span>
+            <small>{completed}/{run.plan.length}</small>
           </summary>
           <ol className="plan-list">
             {run.plan.map((task) => (
@@ -29,7 +47,7 @@ export function RunDetails({ run }: { run: LiveRun }) {
         <details className="detail-block">
           <summary>
             <span>Thinking</span>
-            <small>{run.thinking.length.toLocaleString()} 字符</small>
+            <small>{run.thinking.length.toLocaleString()} chars</small>
           </summary>
           <pre>{run.thinking}</pre>
         </details>
@@ -40,15 +58,15 @@ export function RunDetails({ run }: { run: LiveRun }) {
           <summary>
             <span className="tool-name">{tool.name}</span>
             <small className={tool.isError ? "tool-error" : ""}>
-              {tool.result === undefined ? "运行中" : tool.isError ? "失败" : "完成"}
+              {tool.result === undefined ? "Running" : tool.isError ? "Failed" : "Done"}
             </small>
           </summary>
           <div className="tool-content">
-            <label>输入</label>
+            <label>Input</label>
             <pre>{JSON.stringify(tool.input ?? {}, null, 2)}</pre>
             {tool.result !== undefined ? (
               <>
-                <label>结果</label>
+                <label>Result</label>
                 <pre>{tool.result}</pre>
               </>
             ) : null}

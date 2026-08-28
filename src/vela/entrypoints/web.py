@@ -5,17 +5,31 @@ from __future__ import annotations
 import argparse
 import threading
 import webbrowser
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import suppress
 from pathlib import Path
+from socket import socket
 
 import uvicorn
+from fastapi import FastAPI
 
 from vela import __version__
 from vela.web import create_app
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 3080
+GRACEFUL_SHUTDOWN_TIMEOUT = 2
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+class _ShutdownAwareServer(uvicorn.Server):
+    def __init__(self, config: uvicorn.Config, on_shutdown: Callable[[], None]) -> None:
+        super().__init__(config)
+        self._on_shutdown = on_shutdown
+
+    async def shutdown(self, sockets: list[socket] | None = None) -> None:
+        self._on_shutdown()
+        await super().shutdown(sockets)
 
 
 def app(argv: Sequence[str] | None = None) -> None:
@@ -36,12 +50,27 @@ def app(argv: Sequence[str] | None = None) -> None:
 
     print(f"Vela {__version__} is available at {url}")
     print("Press Ctrl+C to stop the local server.")
-    uvicorn.run(
+    _run_server(
         create_app(cwd),
         host=args.host,
         port=args.port,
-        log_level="warning",
     )
+
+
+def _run_server(application: FastAPI, *, host: str, port: int) -> None:
+    config = uvicorn.Config(
+        application,
+        host=host,
+        port=port,
+        log_level="warning",
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT,
+    )
+    server = _ShutdownAwareServer(
+        config,
+        application.state.runtime_manager.events.close,
+    )
+    with suppress(KeyboardInterrupt):
+        server.run()
 
 
 def _parser() -> argparse.ArgumentParser:

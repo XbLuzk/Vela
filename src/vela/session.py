@@ -140,6 +140,39 @@ class ActiveSession:
                 self.warning = f"Resumed session, but could not remove empty residue: {exc}"
         return record
 
+    def delete(self, reference: str) -> tuple[SessionRecord, SessionRecord] | None:
+        """Delete one conversation and keep a usable current session."""
+        value = reference.strip()
+        if self.store is None:
+            if value not in {self.current.id, "1"} and not self.current.id.startswith(value):
+                return None
+            deleted = self.current
+            self.current = _ephemeral_record(self.current.cwd)
+            self.resumed = False
+            return deleted, self.current
+
+        try:
+            record = self.store.resolve(self.current.cwd, value)
+            if record is None or not self.store.delete(record.id, cwd=self.current.cwd):
+                return None
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - keep the current conversation usable
+            self.warning = f"Could not delete session: {exc}"
+            return None
+
+        if record.id == self.current.id:
+            try:
+                replacement = self.store.resolve(self.current.cwd)
+                self.current = replacement or self.store.create(self.current.cwd)
+                self.resumed = replacement is not None
+            except Exception as exc:  # noqa: BLE001 - deletion already succeeded
+                self.current = _ephemeral_record(self.current.cwd)
+                self.store = None
+                self.resumed = False
+                self.warning = f"Session deleted, but storage became unavailable: {exc}"
+        return record, self.current
+
     def close(self) -> None:
         if self.store is None:
             return
@@ -279,6 +312,15 @@ class SessionStore:
             cursor = connection.execute(
                 "delete from sessions where id = ? and message_count = 0",
                 (session_id,),
+            )
+        return cursor.rowcount > 0
+
+    def delete(self, session_id: str, *, cwd: str | Path) -> bool:
+        """Delete a session only when it belongs to the requested workspace."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "delete from sessions where id = ? and cwd = ?",
+                (session_id, _scope(cwd)),
             )
         return cursor.rowcount > 0
 

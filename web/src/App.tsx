@@ -2,8 +2,10 @@ import { useEffect, useReducer, useState } from "react";
 
 import { api, connectEvents } from "./api";
 import { Composer } from "./components/Composer";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Conversation } from "./components/Conversation";
 import { InteractionBar } from "./components/InteractionBar";
+import { CloseIcon, FolderIcon, SettingsIcon, VelaMark } from "./components/Icons";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { TrustDialog } from "./components/TrustDialog";
@@ -16,6 +18,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trustOpen, setTrustOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<SessionSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [projectPicking, setProjectPicking] = useState(false);
 
   async function runRequest<T>(
     action: Promise<T>,
@@ -47,8 +52,8 @@ export default function App() {
   if (!bootstrap) {
     return (
       <div className="boot-screen">
-        <span className="boot-mark">V</span>
-        <p>正在启动本地工作区…</p>
+        <span className="boot-mark"><VelaMark /></span>
+        <p>Starting local workspace…</p>
       </div>
     );
   }
@@ -66,6 +71,20 @@ export default function App() {
     if (session) dispatch({ type: "event", event: { type: "session_changed", session } });
   }
 
+  async function chooseProject() {
+    setProjectPicking(true);
+    try {
+      const result = await runRequest(api.pickProject());
+      if (!result?.selected || !result.bootstrap) return;
+      dispatch({ type: "loaded", bootstrap: result.bootstrap });
+      setMode(result.bootstrap.config.prompt.agent_mode);
+      setTrustOpen(false);
+      if (!result.bootstrap.ready) setSettingsOpen(true);
+    } finally {
+      setProjectPicking(false);
+    }
+  }
+
   const task = bootstrap.task;
   const messages = bootstrap.session?.messages ?? [];
   const disabled = !bootstrap.ready;
@@ -75,22 +94,34 @@ export default function App() {
       <Sidebar
         sessions={bootstrap.sessions ?? []}
         activeId={bootstrap.session?.id}
-        disabled={Boolean(task?.active) || disabled}
+        disabled={Boolean(task?.active)}
         onNew={() => void changeSession(api.newSession())}
         onSelect={(id) => void changeSession(api.switchSession(id))}
+        onDelete={setPendingDelete}
       />
 
-      <section className="workspace">
+      <section className={`workspace ${task?.active ? "workspace-active" : ""}`}>
         <header className="topbar">
-          <div>
+          <div className="topbar-context">
+            <span className="topbar-kicker">Session</span>
             <strong>{bootstrap.session?.title || "New session"}</strong>
-            <span>{shortPath(bootstrap.cwd)}</span>
+            <button
+              className="project-switch"
+              type="button"
+              title={bootstrap.cwd}
+              disabled={Boolean(task?.active) || projectPicking}
+              onClick={() => void chooseProject()}
+            >
+              <FolderIcon />
+              <span>{projectPicking ? "Selecting directory…" : shortPath(bootstrap.cwd)}</span>
+              <small>Change</small>
+            </button>
           </div>
           <div className="topbar-actions">
             <span className={`connection ${state.connected ? "online" : ""}`}>
               {state.connected ? "Local" : "Reconnecting"}
             </span>
-            <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="打开设置">⚙</button>
+            <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="Open settings"><SettingsIcon /></button>
           </div>
         </header>
 
@@ -98,8 +129,8 @@ export default function App() {
           {bootstrap.project_extensions_pending ? (
             <div className="extension-banner">
               <div>
-                <strong>检测到项目级扩展</strong>
-                <p>当前仍使用内置能力；AGENTS.md、MCP 与 Skills 尚未加载。</p>
+                <strong>Project extensions found</strong>
+                <p>Built-in tools are active. AGENTS.md, MCP servers, and Skills have not been loaded.</p>
               </div>
               <div className="banner-actions">
                 <button
@@ -107,10 +138,10 @@ export default function App() {
                   className="quiet-button"
                   onClick={() => void refresh(api.trust(false))}
                 >
-                  保持关闭
+                  Keep disabled
                 </button>
                 <button type="button" className="primary-button" onClick={() => setTrustOpen(true)}>
-                  查看并启用
+                  Review
                 </button>
               </div>
             </div>
@@ -119,16 +150,16 @@ export default function App() {
           {bootstrap.error ? (
             <div className="setup-banner">
               <div>
-                <strong>完成模型配置后即可开始</strong>
+                <strong>Configure a model to get started</strong>
                 <p>{bootstrap.error}</p>
               </div>
-              <button type="button" className="primary-button" onClick={() => setSettingsOpen(true)}>打开设置</button>
+              <button type="button" className="primary-button" onClick={() => setSettingsOpen(true)}>Open settings</button>
             </div>
           ) : null}
 
           {bootstrap.warnings.length > 0 ? (
             <details className="warning-strip">
-              <summary>{bootstrap.warnings.length} 条启动提示</summary>
+              <summary>{bootstrap.warnings.length} startup warning{bootstrap.warnings.length === 1 ? "" : "s"}</summary>
               {bootstrap.warnings.map((warning) => <p key={warning}>{warning}</p>)}
             </details>
           ) : null}
@@ -138,7 +169,7 @@ export default function App() {
 
         <InteractionBar
           task={task}
-          onApprove={async (value) => { await runRequest(api.approve(value)); }}
+          onApprove={async (value) => Boolean(await runRequest(api.approve(value)))}
           onReview={async (value) => { await runRequest(api.reviewPlan(value)); }}
         />
 
@@ -154,12 +185,10 @@ export default function App() {
         />
 
         <footer className="statusbar">
-          <span>{bootstrap.config.llm.provider} / {bootstrap.config.llm.model}</span>
-          <span>{mode === "plan" ? "LangGraph Plan" : "ReAct"}</span>
-          <span>{bootstrap.tool_count ?? 0} tools</span>
+          <span title={`${bootstrap.config.llm.provider} / ${bootstrap.config.llm.model}`}>{bootstrap.config.llm.model}</span>
+          <span>{mode === "plan" ? "LangGraph Plan" : "ReAct"} · {bootstrap.tool_count ?? 0} tools</span>
           <span className="status-spacer" />
-          <span>{task?.state ?? "idle"}</span>
-          <span>v{bootstrap.version}</span>
+          <span className={`runtime-state ${task?.active ? "active" : ""}`}>{task?.state ?? "idle"}</span>
         </footer>
       </section>
 
@@ -180,8 +209,26 @@ export default function App() {
         />
       ) : null}
 
+      {pendingDelete ? (
+        <ConfirmDialog
+          title="Delete this session?"
+          description={`“${pendingDelete.title || "New session"}” will be permanently deleted from this device. Project files will not be affected.`}
+          confirmLabel="Delete session"
+          pending={deleting}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={async () => {
+            setDeleting(true);
+            try {
+              if (await refresh(api.deleteSession(pendingDelete.id))) setPendingDelete(null);
+            } finally {
+              setDeleting(false);
+            }
+          }}
+        />
+      ) : null}
+
       {notice ? (
-        <button type="button" className="notice" onClick={() => setNotice(null)}>{notice}<span>×</span></button>
+        <button type="button" className="notice" onClick={() => setNotice(null)}>{notice}<CloseIcon /></button>
       ) : null}
     </div>
   );

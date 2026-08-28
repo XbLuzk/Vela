@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -13,7 +14,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from vela import __version__
+from vela.web.directory_picker import pick_directory
 from vela.web.runtime import RuntimeManager
+
+SSE_POLL_INTERVAL_SECONDS = 0.5
 
 
 class MessageRequest(BaseModel):
@@ -46,6 +50,7 @@ def create_app(
     *,
     manager: RuntimeManager | None = None,
     initialize: bool = True,
+    directory_picker: Callable[[str | Path], str | None] = pick_directory,
 ) -> FastAPI:
     runtime_manager = manager or RuntimeManager(cwd)
 
@@ -77,21 +82,9 @@ def create_app(
         return runtime_manager.snapshot()
 
     @app.get("/api/events")
-    async def events() -> StreamingResponse:
-        async def stream() -> AsyncIterator[str]:
-            yield _sse({"type": "connected"})
-            # EventSource reconnects automatically. Re-send authoritative state so
-            # a brief disconnect cannot leave the browser showing a stale task.
-            yield _sse({"type": "bootstrap", "bootstrap": runtime_manager.snapshot()})
-            event_stream = runtime_manager.events.stream()
-            try:
-                while True:
-                    yield _sse(await anext(event_stream))
-            finally:
-                await event_stream.aclose()
-
+    async def events(request: Request) -> StreamingResponse:
         return StreamingResponse(
-            stream(),
+            _event_stream(request, runtime_manager),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -122,23 +115,43 @@ def create_app(
 
     @app.get("/api/sessions")
     async def list_sessions() -> list[dict[str, Any]]:
-        return _runtime(runtime_manager).list_sessions()
+        return runtime_manager.list_sessions()
 
     @app.post("/api/sessions")
     async def new_session() -> dict[str, Any]:
         try:
-            return await _runtime(runtime_manager).new_session()
+            return await runtime_manager.new_session()
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/sessions/{reference}")
     async def switch_session(reference: str) -> dict[str, Any]:
         try:
-            return await _runtime(runtime_manager).switch_session(reference)
+            return await runtime_manager.switch_session(reference)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.delete("/api/sessions/{reference}")
+    async def delete_session(reference: str) -> dict[str, Any]:
+        try:
+            return await runtime_manager.delete_session(reference)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/project/pick")
+    async def pick_project() -> dict[str, Any]:
+        try:
+            selected = await asyncio.to_thread(directory_picker, runtime_manager.cwd)
+            if selected is None:
+                return {"selected": False}
+            snapshot = await runtime_manager.select_project(selected)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"selected": True, "bootstrap": snapshot}
 
     @app.post("/api/trust")
     async def set_trust(request: TrustRequest) -> dict[str, Any]:
@@ -161,6 +174,11 @@ def create_app(
     assets_dir = static_dir / "assets"
     if assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> FileResponse:
+        return FileResponse(static_dir / "favicon.svg", media_type="image/svg+xml")
 
     @app.get("/{path:path}", include_in_schema=False)
     async def frontend(path: str) -> FileResponse:
@@ -185,6 +203,42 @@ def _runtime(manager: RuntimeManager):
 def _sse(event: dict[str, Any]) -> str:
     payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
     return f"data: {payload}\n\n"
+
+
+async def _event_stream(
+    request: Request,
+    runtime_manager: RuntimeManager,
+    *,
+    poll_interval: float = SSE_POLL_INTERVAL_SECONDS,
+) -> AsyncIterator[str]:
+    yield _sse({"type": "connected"})
+    # EventSource reconnects automatically. Re-send authoritative state so
+    # a brief disconnect cannot leave the browser showing a stale task.
+    yield _sse({"type": "bootstrap", "bootstrap": runtime_manager.snapshot()})
+    event_stream = runtime_manager.events.stream()
+    pending_event: asyncio.Task[dict[str, Any]] | None = asyncio.create_task(anext(event_stream))
+    try:
+        while True:
+            if await request.is_disconnected():
+                return
+            done, _ = await asyncio.wait({pending_event}, timeout=poll_interval)
+            if not done:
+                yield ": keep-alive\n\n"
+                continue
+            try:
+                event = pending_event.result()
+            except StopAsyncIteration:
+                return
+            yield _sse(event)
+            pending_event = asyncio.create_task(anext(event_stream))
+    except asyncio.CancelledError:
+        return
+    finally:
+        if pending_event is not None and not pending_event.done():
+            pending_event.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await pending_event
+        await event_stream.aclose()
 
 
 def _is_local_origin(origin: str) -> bool:

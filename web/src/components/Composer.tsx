@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { AgentMode, TaskSnapshot } from "../types";
+import { SendIcon } from "./Icons";
 
 interface ComposerProps {
   mode: AgentMode;
@@ -20,6 +21,8 @@ export function Composer({
   onCancel,
 }: ComposerProps) {
   const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const active = Boolean(task?.active);
 
@@ -31,19 +34,24 @@ export function Composer({
   }, [message]);
 
   async function submit() {
-    const value = message.trim();
-    if (!value || active || disabled) return;
+    const value = messageForSubmission(message, active, disabled, sendingRef.current);
+    if (!value) return;
+    sendingRef.current = true;
+    setSending(true);
     setMessage("");
     try {
       await onSend(value);
     } catch {
-      setMessage(value);
+      setMessage((current) => current || value);
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
   }
 
   return (
     <section className="composer-wrap">
-      <div className={`composer ${active ? "busy" : ""}`}>
+      <div className={`composer ${active || sending ? "busy" : ""}`}>
         <textarea
           ref={textareaRef}
           value={message}
@@ -54,18 +62,18 @@ export function Composer({
               void submit();
             }
           }}
-          placeholder={active ? "任务正在运行，可以先整理下一条消息…" : "描述你想完成的任务"}
-          aria-label="消息"
+          placeholder={active ? "Draft your next message…" : "Describe a task or ask about the code"}
+          aria-label="Message"
           disabled={disabled}
           rows={1}
         />
         <div className="composer-actions">
-          <div className="mode-switch" aria-label="Agent 模式">
+          <div className="mode-switch" aria-label="Agent mode">
             <button
               type="button"
               className={mode === "react" ? "active" : ""}
               onClick={() => onModeChange("react")}
-              disabled={active || disabled}
+              disabled={active || disabled || sending}
             >
               ReAct
             </button>
@@ -73,29 +81,40 @@ export function Composer({
               type="button"
               className={mode === "plan" ? "active" : ""}
               onClick={() => onModeChange("plan")}
-              disabled={active || disabled}
+              disabled={active || disabled || sending}
             >
               Plan
             </button>
           </div>
+          <span className="composer-hint"><kbd>Enter</kbd> send <i>·</i> <kbd>Shift Enter</kbd> newline</span>
           {active ? (
             <button className="cancel-button" type="button" onClick={() => void onCancel()}>
               <span aria-hidden="true" />
-              停止
+              Stop
             </button>
           ) : (
             <button
               className="send-button"
               type="button"
               onClick={() => void submit()}
-              disabled={!message.trim() || disabled}
-              aria-label="发送消息"
+              disabled={!message.trim() || disabled || sending}
+              aria-label="Send message"
             >
-              ↑
+              <SendIcon />
             </button>
           )}
         </div>
       </div>
     </section>
   );
+}
+
+export function messageForSubmission(
+  message: string,
+  active: boolean,
+  disabled: boolean,
+  sending: boolean,
+): string | null {
+  const value = message.trim();
+  return value && !active && !disabled && !sending ? value : null;
 }

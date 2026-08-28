@@ -153,6 +153,18 @@ def test_session_store_returns_none_for_missing_reference(tmp_path):
     assert store.resolve(tmp_path / "project", "missing") is None
 
 
+def test_session_store_deletes_only_within_project_scope(tmp_path):
+    store = SessionStore(tmp_path / "sessions.db")
+    project = tmp_path / "project"
+    other_project = tmp_path / "other-project"
+    session = store.create(project)
+
+    assert store.delete(session.id, cwd=other_project) is False
+    assert store.get(session.id, cwd=project) is not None
+    assert store.delete(session.id, cwd=project) is True
+    assert store.get(session.id) is None
+
+
 def test_session_store_resolves_exact_id_older_than_list_limit(tmp_path):
     store = SessionStore(tmp_path / "sessions.db")
     project = tmp_path / "project"
@@ -246,6 +258,36 @@ def test_active_session_starts_new_conversation_and_discards_empty_current(tmp_p
     assert created.message_count == 0
     assert active.resumed is False
     assert store.get(empty_id) is None
+
+
+def test_active_session_deletes_current_and_resumes_previous(tmp_path):
+    store = SessionStore(tmp_path / "sessions.db")
+    project = tmp_path / "project"
+    previous = store.create(project)
+    store.save(previous.id, [Message(role="user", content="previous work")])
+    active = ActiveSession.open(project, resume=False, store=store)
+    current = active.save([Message(role="user", content="delete me")])
+
+    deleted = active.delete(current.id)
+
+    assert deleted is not None
+    assert deleted[0].id == current.id
+    assert deleted[1].id == previous.id
+    assert active.current.messages[0].content == "previous work"
+    assert store.get(current.id) is None
+
+
+def test_active_session_deletes_last_session_and_creates_blank_replacement(tmp_path):
+    store = SessionStore(tmp_path / "sessions.db")
+    active = ActiveSession.open(tmp_path / "project", store=store)
+    deleted_id = active.current.id
+
+    deleted = active.delete(deleted_id)
+
+    assert deleted is not None
+    assert active.current.id != deleted_id
+    assert active.current.message_count == 0
+    assert store.get(deleted_id) is None
 
 
 def test_active_session_keeps_running_in_memory_when_save_fails(tmp_path, monkeypatch):

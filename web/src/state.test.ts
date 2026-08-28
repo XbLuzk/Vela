@@ -95,4 +95,24 @@ describe("runtime event reducer", () => {
     expect(state.liveRun).toBeNull();
     expect(state.bootstrap?.session?.messages).toHaveLength(2);
   });
+
+  it("drops the previous empty draft when a new session replaces it", () => {
+    const loaded = reducer(initialState, {
+      type: "loaded",
+      bootstrap: { ...bootstrap, sessions: [bootstrap.session!] },
+    });
+    const state = reducer(loaded, {
+      type: "event",
+      event: {
+        type: "session_changed",
+        session: {
+          ...bootstrap.session!,
+          id: "session-2",
+          title: "New session",
+        },
+      },
+    });
+
+    expect(state.bootstrap?.sessions?.map((session) => session.id)).toEqual(["session-2"]);
+  });
 });

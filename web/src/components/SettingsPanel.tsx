@@ -1,6 +1,20 @@
 import { useEffect, useState } from "react";
 
-import type { Bootstrap } from "../types";
+import type { Bootstrap, ModelProfile } from "../types";
+import { CloseIcon } from "./Icons";
+
+export function resolveBaseUrl(
+  configured: string | null | undefined,
+  provider: string,
+  model: string,
+  profiles: ModelProfile[],
+): string {
+  const explicit = configured?.trim();
+  if (explicit) return explicit;
+  return (
+    profiles.find((profile) => profile.provider === provider && profile.model === model)?.base_url ?? ""
+  );
+}
 
 interface SettingsPanelProps {
   open: boolean;
@@ -14,16 +28,25 @@ export function SettingsPanel({ open, bootstrap, onClose, onSave }: SettingsPane
   const [provider, setProvider] = useState(config.llm.provider);
   const [model, setModel] = useState(config.llm.model);
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState(config.llm.base_url ?? "");
+  const [baseUrl, setBaseUrl] = useState(
+    resolveBaseUrl(config.llm.base_url, config.llm.provider, config.llm.model, bootstrap.model_profiles),
+  );
   const [approvalMode, setApprovalMode] = useState(config.policy.approval_mode);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setProvider(config.llm.provider);
     setModel(config.llm.model);
-    setBaseUrl(config.llm.base_url ?? "");
+    setBaseUrl(
+      resolveBaseUrl(
+        config.llm.base_url,
+        config.llm.provider,
+        config.llm.model,
+        bootstrap.model_profiles,
+      ),
+    );
     setApprovalMode(config.policy.approval_mode);
-  }, [config]);
+  }, [bootstrap.model_profiles, config]);
 
   if (!open) return null;
 
@@ -48,18 +71,18 @@ export function SettingsPanel({ open, bootstrap, onClose, onSave }: SettingsPane
 
   return (
     <div className="panel-backdrop" role="presentation" onMouseDown={onClose}>
-      <aside className="settings-panel" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(event) => event.stopPropagation()}>
+      <aside className="settings-panel" role="dialog" aria-modal="true" aria-label="Settings" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
             <span className="eyebrow">Local configuration</span>
-            <h2>设置</h2>
+            <h2>Settings</h2>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭设置">×</button>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
         </header>
 
         <div className="settings-body">
           <label>
-            预设模型
+            Model preset
             <select
               value={`${provider}/${model}`}
               onChange={(event) => {
@@ -100,7 +123,7 @@ export function SettingsPanel({ open, bootstrap, onClose, onSave }: SettingsPane
               type="password"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder={config.llm.api_key === "***" ? "已配置；留空保持不变" : "输入 API Key"}
+              placeholder={config.llm.api_key === "***" ? "Configured; leave blank to keep it" : "Enter API key"}
               autoComplete="off"
             />
           </label>
@@ -111,7 +134,7 @@ export function SettingsPanel({ open, bootstrap, onClose, onSave }: SettingsPane
           </label>
 
           <fieldset>
-            <legend>工具审批</legend>
+            <legend>Tool approval</legend>
             <label className="radio-row">
               <input
                 type="radio"
@@ -119,7 +142,7 @@ export function SettingsPanel({ open, bootstrap, onClose, onSave }: SettingsPane
                 checked={approvalMode === "ask"}
                 onChange={() => setApprovalMode("ask")}
               />
-              <span><strong>Ask</strong><small>修改文件和运行危险命令前确认</small></span>
+              <span><strong>Ask</strong><small>Confirm before file changes or risky commands</small></span>
             </label>
             <label className="radio-row">
               <input
@@ -128,15 +151,15 @@ export function SettingsPanel({ open, bootstrap, onClose, onSave }: SettingsPane
                 checked={approvalMode === "auto"}
                 onChange={() => setApprovalMode("auto")}
               />
-              <span><strong>Auto</strong><small>由安全策略直接决定是否执行</small></span>
+              <span><strong>Auto</strong><small>Let the safety policy decide automatically</small></span>
             </label>
           </fieldset>
         </div>
 
         <footer>
-          <button type="button" className="quiet-button" onClick={onClose}>取消</button>
+          <button type="button" className="quiet-button" onClick={onClose}>Cancel</button>
           <button type="button" className="primary-button" onClick={() => void save()} disabled={saving || !provider || !model}>
-            {saving ? "保存中…" : "保存并重载"}
+            {saving ? "Saving…" : "Save and reload"}
           </button>
         </footer>
       </aside>

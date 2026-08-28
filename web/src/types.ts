@@ -22,6 +22,8 @@ export interface TaskSnapshot {
   state: string;
   run_id?: string | null;
   approval?: {
+    id?: number;
+    pending_count?: number;
     tool_name: string;
     input: Record<string, unknown>;
     danger_level: string;

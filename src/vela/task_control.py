@@ -80,6 +80,8 @@ class TaskController:
         self._approval_future: asyncio.Future[str] | None = None
         self._approval_request: dict[str, Any] | None = None
         self._approval_queue: deque[tuple[asyncio.Future[str], dict[str, Any]]] = deque()
+        self._approval_sequence = 0
+        self._approval_id: int | None = None
         self._review_feedback_pending = False
         self._watch_started = False
         self._cancel_requested = False
@@ -109,6 +111,16 @@ class TaskController:
     @property
     def approval_request(self) -> dict[str, Any] | None:
         return self._approval_request
+
+    @property
+    def approval_id(self) -> int | None:
+        return self._approval_id
+
+    @property
+    def pending_approval_count(self) -> int:
+        current = int(self.awaiting_approval)
+        queued = sum(not future.done() for future, _request in self._approval_queue)
+        return current + queued
 
     def set_callbacks(
         self,
@@ -230,9 +242,11 @@ class TaskController:
         choices = {
             "y": "approve",
             "yes": "approve",
+            "approve": "approve",
             "允许": "approve",
             "n": "deny",
             "no": "deny",
+            "deny": "deny",
             "拒绝": "deny",
             "a": "auto",
             "auto": "auto",
@@ -291,19 +305,24 @@ class TaskController:
         self._approval_queue.clear()
         self._approval_future = None
         self._approval_request = None
+        self._approval_id = None
         self._notify()
 
     def _promote_next_approval(self) -> None:
         if self._approval_future is not None and not self._approval_future.done():
+            self._notify()
             return
         self._approval_future = None
         self._approval_request = None
+        self._approval_id = None
         while self._approval_queue:
             future, request = self._approval_queue.popleft()
             if future.done():
                 continue
             self._approval_future = future
             self._approval_request = request
+            self._approval_sequence += 1
+            self._approval_id = self._approval_sequence
             break
         self._notify()
 

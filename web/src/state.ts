@@ -60,7 +60,11 @@ function applyRuntimeEvent(state: AppState, event: RuntimeEvent): AppState {
 
   if (event.type === "session_updated" || event.type === "session_changed") {
     const session = event.session as SessionSummary;
-    const sessions = replaceSession(state.bootstrap.sessions ?? [], session);
+    const sessions = replaceSession(
+      state.bootstrap.sessions ?? [],
+      session,
+      state.bootstrap.session,
+    );
     return {
       ...state,
       liveRun: null,
@@ -142,9 +146,20 @@ function withRun(state: AppState, liveRun: LiveRun): AppState {
   return { ...state, liveRun };
 }
 
-function replaceSession(sessions: SessionSummary[], current: SessionSummary): SessionSummary[] {
+function replaceSession(
+  sessions: SessionSummary[],
+  current: SessionSummary,
+  previous?: SessionSummary,
+): SessionSummary[] {
   const summary = { ...current, messages: undefined };
-  return [summary, ...sessions.filter((session) => session.id !== current.id)];
+  return [
+    summary,
+    ...sessions.filter(
+      (session) =>
+        session.id !== current.id &&
+        !(previous?.message_count === 0 && session.id === previous.id),
+    ),
+  ];
 }
 
 function updatePlanTask(

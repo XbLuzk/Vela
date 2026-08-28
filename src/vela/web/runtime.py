@@ -22,26 +22,46 @@ from vela.session_history import finalize_interrupted_history
 from vela.task_control import TaskController, TaskState
 from vela.trust import ProjectTrustStore, has_trust_sensitive_resources
 
+_EVENT_HUB_CLOSED: dict[str, Any] = {}
+
 
 class EventHub:
     """Fan out JSON-safe runtime events to connected browser streams."""
 
     def __init__(self) -> None:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+        self._closed = False
 
     async def publish(self, event: dict[str, Any]) -> None:
+        if self._closed:
+            return
         for queue in tuple(self._subscribers):
             if queue.full():
                 with suppress(asyncio.QueueEmpty):
                     queue.get_nowait()
             queue.put_nowait(event)
 
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for queue in tuple(self._subscribers):
+            if queue.full():
+                with suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+            queue.put_nowait(_EVENT_HUB_CLOSED)
+
     async def stream(self) -> AsyncIterator[dict[str, Any]]:
+        if self._closed:
+            return
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
         self._subscribers.add(queue)
         try:
             while True:
-                yield await queue.get()
+                event = await queue.get()
+                if event is _EVENT_HUB_CLOSED:
+                    return
+                yield event
         finally:
             self._subscribers.discard(queue)
 
@@ -77,6 +97,7 @@ class WebRuntime:
         config: VelaConfig,
         events: EventHub,
         warnings: list[str],
+        active_session: ActiveSession,
     ) -> WebRuntime:
         if not config.llm.api_key:
             raise ValueError("LLM API key is not configured. Open Settings to configure a model.")
@@ -86,7 +107,6 @@ class WebRuntime:
             f"MCP server {name} failed to load: {error}"
             for name, error in mcp_manager.last_errors.items()
         )
-        active_session = ActiveSession.open(cwd, resume=True)
         client = create_llm_client(config.llm)
         agent = Agent(
             llm_client=client,
@@ -109,18 +129,23 @@ class WebRuntime:
     def snapshot(self) -> dict[str, Any]:
         return {
             "task": self.task_snapshot(),
-            "session": _session_payload(self.active_session.current, include_messages=True),
-            "sessions": self.list_sessions(),
             "tool_count": len(self.agent.tool_registry.list_names()),
         }
 
     def task_snapshot(self) -> dict[str, Any]:
         approval = self.controller.approval_request
+        approval_payload = _json_value(approval) if approval else None
+        if isinstance(approval_payload, dict):
+            approval_payload = {
+                **approval_payload,
+                "id": self.controller.approval_id,
+                "pending_count": self.controller.pending_approval_count,
+            }
         return {
             "active": self.controller.active,
             "state": self.controller.state.value if self.controller.state else "idle",
             "run_id": self.current_run_id,
-            "approval": _json_value(approval) if approval else None,
+            "approval": approval_payload,
             "awaiting_plan_review": self.controller.awaiting_plan_review,
             "review_feedback_pending": self.controller.review_feedback_pending,
             "error": str(self.controller.error) if self.controller.error else None,
@@ -202,43 +227,10 @@ class WebRuntime:
     def submit_plan_review(self, value: str) -> str:
         return self.controller.submit_plan_review(value)
 
-    def list_sessions(self) -> list[dict[str, Any]]:
-        return [
-            _session_payload(record, include_messages=False)
-            for record in self.active_session.list(limit=30)
-        ]
-
-    async def new_session(self) -> dict[str, Any]:
-        self._require_idle()
-        record = self.active_session.new()
-        self._activate_session(record)
-        await self.events.publish(
-            {
-                "type": "session_changed",
-                "session": _session_payload(record, include_messages=True),
-            }
-        )
-        return _session_payload(record, include_messages=True)
-
-    async def switch_session(self, reference: str) -> dict[str, Any]:
-        self._require_idle()
-        record = self.active_session.switch(reference)
-        if record is None:
-            raise KeyError(f"Session not found: {reference}")
-        self._activate_session(record)
-        await self.events.publish(
-            {
-                "type": "session_changed",
-                "session": _session_payload(record, include_messages=True),
-            }
-        )
-        return _session_payload(record, include_messages=True)
-
     async def close(self) -> None:
         if self.controller.active:
             self.controller.request_cancel()
             await self.controller.wait()
-        self.active_session.close()
 
     async def _request_approval(self, request: dict[str, Any]) -> str:
         decision = await self.controller.request_approval(request)
@@ -247,14 +239,10 @@ class WebRuntime:
             return "approve"
         return decision
 
-    def _activate_session(self, record: SessionRecord) -> None:
+    def activate_session(self, record: SessionRecord) -> None:
         self.agent.clear_history()
         self.agent.history = list(record.messages)
         self.agent.graph_thread_id = record.id
-
-    def _require_idle(self) -> None:
-        if self.controller.active:
-            raise RuntimeError("Cancel the running task before changing sessions")
 
     def _schedule_state_event(self) -> None:
         try:
@@ -265,12 +253,13 @@ class WebRuntime:
 
 
 class RuntimeManager:
-    """Initialize and rebuild the Web runtime around trust and model settings."""
+    """Own session state and rebuild the model runtime when settings change."""
 
     def __init__(self, cwd: str | Path) -> None:
         self.cwd = Path(cwd).expanduser().resolve()
         self.events = EventHub()
         self.runtime: WebRuntime | None = None
+        self.active_session: ActiveSession | None = None
         self.config: VelaConfig | None = None
         self.config_warnings: list[str] = []
         self.error: str | None = None
@@ -279,11 +268,15 @@ class RuntimeManager:
         self.project_trusted = False
 
     async def initialize(self) -> None:
+        self._load_project_context()
+        self._ensure_session()
+        await self.rebuild()
+
+    def _load_project_context(self) -> None:
         sensitive = has_trust_sensitive_resources(self.cwd)
         saved = self.trust_store.get(self.cwd)
         self.project_extensions_pending = sensitive and saved is None
         self.project_trusted = True if not sensitive else bool(saved)
-        await self.rebuild()
 
     async def rebuild(self) -> None:
         if self.runtime is not None:
@@ -300,6 +293,7 @@ class RuntimeManager:
                 self.config,
                 self.events,
                 self.config_warnings,
+                self._ensure_session(),
             )
         except Exception as exc:  # noqa: BLE001 - UI must remain available for repair
             self.error = str(exc)
@@ -310,8 +304,8 @@ class RuntimeManager:
     def snapshot(self) -> dict[str, Any]:
         config = self.config or load_config(project_trusted=self.project_trusted)
         warnings = list(self.config_warnings)
-        if self.runtime is not None:
-            warnings.extend(_session_warnings(self.runtime.active_session))
+        active_session = self._ensure_session()
+        warnings.extend(_session_warnings(active_session))
         base = {
             "version": __version__,
             "ready": self.runtime is not None,
@@ -322,10 +316,68 @@ class RuntimeManager:
             "config": config_to_public_dict(config),
             "model_profiles": [asdict(profile) for profile in DEFAULT_MODEL_PROFILES],
             "warnings": warnings,
+            "session": _session_payload(active_session.current, include_messages=True),
+            "sessions": self.list_sessions(),
         }
         if self.runtime is not None:
             base.update(self.runtime.snapshot())
         return base
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        return [
+            _session_payload(record, include_messages=False)
+            for record in self._ensure_session().list(limit=30)
+        ]
+
+    async def new_session(self) -> dict[str, Any]:
+        self._require_idle()
+        record = self._ensure_session().new()
+        self._activate_session(record)
+        return await self._publish_session(record)
+
+    async def switch_session(self, reference: str) -> dict[str, Any]:
+        self._require_idle()
+        record = self._ensure_session().switch(reference)
+        if record is None:
+            raise KeyError(f"Session not found: {reference}")
+        self._activate_session(record)
+        return await self._publish_session(record)
+
+    async def delete_session(self, reference: str) -> dict[str, Any]:
+        self._require_idle()
+        active_session = self._ensure_session()
+        previous_id = active_session.current.id
+        result = active_session.delete(reference)
+        if result is None:
+            raise KeyError(f"Session not found: {reference}")
+        _, current = result
+        if current.id != previous_id:
+            self._activate_session(current)
+        snapshot = self.snapshot()
+        await self.events.publish({"type": "bootstrap", "bootstrap": snapshot})
+        return snapshot
+
+    async def select_project(self, path: str | Path) -> dict[str, Any]:
+        self._require_idle("switching projects")
+        selected = Path(path).expanduser().resolve()
+        if not selected.exists():
+            raise ValueError(f"Project directory does not exist: {selected}")
+        if not selected.is_dir():
+            raise ValueError(f"Project path is not a directory: {selected}")
+        if selected == self.cwd:
+            return self.snapshot()
+
+        if self.runtime is not None:
+            await self.runtime.close()
+            self.runtime = None
+        if self.active_session is not None:
+            self.active_session.close()
+        self.cwd = selected
+        self.active_session = None
+        self._load_project_context()
+        self._ensure_session()
+        await self.rebuild()
+        return self.snapshot()
 
     async def set_trust(self, trusted: bool) -> None:
         if self.runtime is not None and self.runtime.controller.active:
@@ -344,6 +396,27 @@ class RuntimeManager:
     async def close(self) -> None:
         if self.runtime is not None:
             await self.runtime.close()
+            self.runtime = None
+        if self.active_session is not None:
+            self.active_session.close()
+
+    def _ensure_session(self) -> ActiveSession:
+        if self.active_session is None:
+            self.active_session = ActiveSession.open(self.cwd, resume=True)
+        return self.active_session
+
+    def _require_idle(self, action: str = "changing sessions") -> None:
+        if self.runtime is not None and self.runtime.controller.active:
+            raise RuntimeError(f"Cancel the running task before {action}")
+
+    def _activate_session(self, record: SessionRecord) -> None:
+        if self.runtime is not None:
+            self.runtime.activate_session(record)
+
+    async def _publish_session(self, record: SessionRecord) -> dict[str, Any]:
+        payload = _session_payload(record, include_messages=True)
+        await self.events.publish({"type": "session_changed", "session": payload})
+        return payload
 
 
 def serialize_agent_event(event: AgentEvent) -> dict[str, Any]:
