@@ -4,7 +4,7 @@ import { initialState, reducer } from "./state";
 import type { Bootstrap } from "./types";
 
 const bootstrap: Bootstrap = {
-  version: "0.5.0",
+  version: "0.6.0",
   ready: true,
   cwd: "/workspace",
   project_extensions_pending: false,
