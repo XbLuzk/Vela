@@ -9,15 +9,16 @@ import { RunDetails } from "./RunDetails";
 interface ConversationProps {
   messages: Message[];
   liveRun: LiveRun | null;
+  completedRun: LiveRun | null;
   cwd: string;
 }
 
-export function Conversation({ messages, liveRun, cwd }: ConversationProps) {
+export function Conversation({ messages, liveRun, completedRun, cwd }: ConversationProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, liveRun?.text, liveRun?.thinking, liveRun?.tools.length]);
+  }, [messages, liveRun?.text, liveRun?.thinking, liveRun?.tools.length, completedRun?.id]);
 
   const visible = messages.filter(
     (message) =>
@@ -69,6 +70,11 @@ export function Conversation({ messages, liveRun, cwd }: ConversationProps) {
               {liveRun.error ? <p className="run-error">{liveRun.error}</p> : null}
             </div>
           </article>
+        ) : null}
+        {completedRun ? (
+          <section className="completed-run" aria-label="Files changed in the latest run">
+            <RunDetails run={completedRun} />
+          </section>
         ) : null}
         <div ref={endRef} />
       </div>

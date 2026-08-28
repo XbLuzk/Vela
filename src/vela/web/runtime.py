@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
+import json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -19,6 +21,7 @@ from vela.llm.model_profiles import DEFAULT_MODEL_PROFILES
 from vela.mcp import McpClientManager
 from vela.session import ActiveSession, SessionRecord
 from vela.session_history import finalize_interrupted_history
+from vela.storage import user_state_path, write_private_text
 from vela.task_control import TaskController, TaskState
 from vela.trust import ProjectTrustStore, has_trust_sensitive_resources
 
@@ -178,13 +181,22 @@ class WebRuntime:
 
     async def _run(self, message: str, run_id: str) -> None:
         pending_error: Exception | None = None
+        file_snapshots: dict[str, _FileSnapshot] = {}
         try:
             stream = self.agent.run(message)
             try:
                 async for event in stream:
                     if event.get("type") == "plan_status":
                         self.controller.set_phase(str(event.get("phase") or ""))
-                    await self.events.publish({**serialize_agent_event(event), "run_id": run_id})
+                    changed_file = _record_file_change(
+                        event,
+                        cwd=self.cwd,
+                        snapshots=file_snapshots,
+                    )
+                    payload = {**serialize_agent_event(event), "run_id": run_id}
+                    if changed_file is not None:
+                        payload["changed_file"] = changed_file
+                    await self.events.publish(payload)
                     if event.get("type") == "error":
                         error = event.get("error")
                         pending_error = (
@@ -266,10 +278,12 @@ class RuntimeManager:
         self.trust_store = ProjectTrustStore()
         self.project_extensions_pending = False
         self.project_trusted = False
+        self.recent_projects = _RecentProjects()
 
     async def initialize(self) -> None:
         self._load_project_context()
         self._ensure_session()
+        self.recent_projects.record(self.cwd)
         await self.rebuild()
 
     def _load_project_context(self) -> None:
@@ -318,6 +332,7 @@ class RuntimeManager:
             "warnings": warnings,
             "session": _session_payload(active_session.current, include_messages=True),
             "sessions": self.list_sessions(),
+            "recent_projects": self.recent_projects.list(),
         }
         if self.runtime is not None:
             base.update(self.runtime.snapshot())
@@ -357,6 +372,36 @@ class RuntimeManager:
         await self.events.publish({"type": "bootstrap", "bootstrap": snapshot})
         return snapshot
 
+    async def rename_session(self, reference: str, title: str) -> dict[str, Any]:
+        self._require_idle()
+        active_session = self._ensure_session()
+        if active_session.store is None:
+            if reference != active_session.current.id:
+                raise KeyError(f"Session not found: {reference}")
+            updated = active_session.rename(title)
+        else:
+            updated = active_session.store.rename(reference, title, cwd=self.cwd)
+        if updated.id == active_session.current.id:
+            active_session.current = updated
+        payload = _session_payload(updated, include_messages=False)
+        await self.events.publish({"type": "session_metadata_updated", "session": payload})
+        return payload
+
+    async def pin_session(self, reference: str, pinned: bool) -> dict[str, Any]:
+        self._require_idle()
+        active_session = self._ensure_session()
+        if active_session.store is None:
+            if reference != active_session.current.id:
+                raise KeyError(f"Session not found: {reference}")
+            updated = active_session.pin(pinned)
+        else:
+            updated = active_session.store.pin(reference, pinned, cwd=self.cwd)
+        if updated.id == active_session.current.id:
+            active_session.current = updated
+        payload = _session_payload(updated, include_messages=False)
+        await self.events.publish({"type": "session_metadata_updated", "session": payload})
+        return payload
+
     async def select_project(self, path: str | Path) -> dict[str, Any]:
         self._require_idle("switching projects")
         selected = Path(path).expanduser().resolve()
@@ -373,6 +418,7 @@ class RuntimeManager:
         if self.active_session is not None:
             self.active_session.close()
         self.cwd = selected
+        self.recent_projects.record(selected)
         self.active_session = None
         self._load_project_context()
         self._ensure_session()
@@ -446,6 +492,7 @@ def _session_payload(record: SessionRecord, include_messages: bool) -> dict[str,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "message_count": record.message_count,
+        "pinned": record.pinned,
     }
     if include_messages:
         payload["messages"] = [_json_value(message) for message in record.messages]
@@ -455,3 +502,100 @@ def _session_payload(record: SessionRecord, include_messages: bool) -> dict[str,
 def _session_warnings(active_session: ActiveSession) -> list[str]:
     warning = active_session.take_warning()
     return [warning] if warning else []
+
+
+_MAX_FILE_SNAPSHOT_CHARS = 120_000
+_MAX_DIFF_CHARS = 14_000
+
+
+class _FileSnapshot:
+    def __init__(self, path: Path, relative_path: str, before: str | None) -> None:
+        self.path = path
+        self.relative_path = relative_path
+        self.before = before
+
+
+def _record_file_change(
+    event: AgentEvent,
+    *,
+    cwd: Path,
+    snapshots: dict[str, _FileSnapshot],
+) -> dict[str, Any] | None:
+    """Attach a compact per-run diff for successful native file edits only."""
+    event_type = event.get("type")
+    call_id = str(event.get("tool_call_id") or "")
+    if event_type == "tool_call":
+        if str(event.get("name") or "") not in {"write_file", "edit_file"}:
+            return None
+        tool_input = event.get("input")
+        if not isinstance(tool_input, dict) or tool_input.get("dry_run"):
+            return None
+        path = _project_file(cwd, tool_input.get("path"))
+        if path is not None:
+            snapshots[call_id] = _FileSnapshot(
+                path, str(path.relative_to(cwd)), _read_snapshot(path)
+            )
+        return None
+    if event_type != "tool_result" or bool(event.get("is_error")):
+        return None
+    snapshot = snapshots.pop(call_id, None)
+    if snapshot is None:
+        return None
+    after = _read_snapshot(snapshot.path)
+    diff = "".join(
+        difflib.unified_diff(
+            (snapshot.before or "").splitlines(keepends=True),
+            (after or "").splitlines(keepends=True),
+            fromfile=f"a/{snapshot.relative_path}",
+            tofile=f"b/{snapshot.relative_path}",
+        )
+    )
+    return {
+        "path": snapshot.relative_path,
+        "diff": diff[:_MAX_DIFF_CHARS],
+        "truncated": len(diff) > _MAX_DIFF_CHARS or _snapshot_was_truncated(snapshot.before, after),
+    }
+
+
+def _project_file(cwd: Path, value: Any) -> Path | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = (cwd / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+    try:
+        candidate.relative_to(cwd)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _read_snapshot(path: Path) -> str | None:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return content[:_MAX_FILE_SNAPSHOT_CHARS]
+
+
+def _snapshot_was_truncated(before: str | None, after: str | None) -> bool:
+    return any(
+        value is not None and len(value) >= _MAX_FILE_SNAPSHOT_CHARS for value in (before, after)
+    )
+
+
+class _RecentProjects:
+    def __init__(self) -> None:
+        self.path = user_state_path("recent-projects.json")
+
+    def list(self) -> list[str]:
+        try:
+            values = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [
+            str(Path(value)) for value in values if isinstance(value, str) and Path(value).is_dir()
+        ][:6]
+
+    def record(self, cwd: Path) -> None:
+        values = [str(cwd), *(value for value in self.list() if value != str(cwd))]
+        with suppress(OSError):
+            write_private_text(self.path, json.dumps(values[:6], ensure_ascii=False))

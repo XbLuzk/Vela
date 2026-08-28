@@ -15,6 +15,7 @@ export function RunDetails({ run }: { run: LiveRun }) {
     run.plan.length ? `${completed}/${run.plan.length} steps` : null,
     run.tools.length ? `${run.tools.length} tool${run.tools.length === 1 ? "" : "s"}` : null,
   ].filter(Boolean).join(" · ");
+  const changedFiles = run.tools.flatMap((tool) => tool.changedFile ? [tool.changedFile] : []);
 
   return (
     <div className={`run-details run-${run.status}`}>
@@ -23,6 +24,19 @@ export function RunDetails({ run }: { run: LiveRun }) {
         <strong>{routeLabel}</strong>
         {routeSummary ? <small>{routeSummary}</small> : null}
       </div>
+      {changedFiles.length > 0 ? (
+        <details className="detail-block changed-files">
+          <summary><span>Files changed</span><small>{changedFiles.length}</small></summary>
+          <div className="file-change-list">
+            {changedFiles.map((file, index) => (
+              <details key={`${file.path}-${index}`}>
+                <summary>{file.path}</summary>
+                <pre>{file.diff || "File content changed."}{file.truncated ? "\n\nDiff preview truncated." : ""}</pre>
+              </details>
+            ))}
+          </div>
+        </details>
+      ) : null}
       {run.plan.length > 0 ? (
         <details className="detail-block plan-block">
           <summary>

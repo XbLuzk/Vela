@@ -7,7 +7,7 @@ from vela.config import VelaConfig
 from vela.plan.models import ExecutionPlan, Task, TaskType
 from vela.session import ActiveSession, SessionStore
 from vela.web import runtime as runtime_module
-from vela.web.runtime import EventHub, RuntimeManager, serialize_agent_event
+from vela.web.runtime import EventHub, RuntimeManager, _record_file_change, serialize_agent_event
 
 
 def test_serialize_agent_event_converts_errors_and_plan_dataclasses():
@@ -25,6 +25,37 @@ def test_serialize_agent_event_converts_errors_and_plan_dataclasses():
     assert payload["type"] == "plan_created"
     assert payload["error"] == "boom"
     assert payload["plan"]["tasks"]["T1"]["type"] == "FILE_WRITE"
+
+
+def test_file_change_tracking_emits_a_unified_diff(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("before\n", encoding="utf-8")
+    snapshots = {}
+
+    assert (
+        _record_file_change(
+            {
+                "type": "tool_call",
+                "tool_call_id": "write-1",
+                "name": "write_file",
+                "input": {"path": "notes.txt"},
+            },
+            cwd=tmp_path,
+            snapshots=snapshots,
+        )
+        is None
+    )
+    target.write_text("after\n", encoding="utf-8")
+    change = _record_file_change(
+        {"type": "tool_result", "tool_call_id": "write-1", "is_error": False},
+        cwd=tmp_path,
+        snapshots=snapshots,
+    )
+
+    assert change is not None
+    assert change["path"] == "notes.txt"
+    assert "-before" in change["diff"]
+    assert "+after" in change["diff"]
 
 
 def test_event_hub_fans_out_to_connected_streams():

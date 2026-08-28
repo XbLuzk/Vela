@@ -28,6 +28,7 @@ const bootstrap: Bootstrap = {
     created_at: "now",
     updated_at: "now",
     message_count: 0,
+    pinned: false,
     messages: [],
   },
 };
@@ -94,6 +95,32 @@ describe("runtime event reducer", () => {
 
     expect(state.liveRun).toBeNull();
     expect(state.bootstrap?.session?.messages).toHaveLength(2);
+  });
+
+  it("keeps the latest file change drawer after the conversation is saved", () => {
+    let state = reducer(initialState, { type: "loaded", bootstrap });
+    state = reducer(state, {
+      type: "event",
+      event: { type: "user_message", run_id: "run-1", message: { role: "user", content: "edit" } },
+    });
+    state = reducer(state, {
+      type: "event",
+      event: { type: "tool_call", tool_call_id: "call-1", name: "edit_file", input: { path: "README.md" } },
+    });
+    state = reducer(state, {
+      type: "event",
+      event: {
+        type: "tool_result", tool_call_id: "call-1", result: "done",
+        changed_file: { path: "README.md", diff: "@@", truncated: false },
+      },
+    });
+    state = reducer(state, {
+      type: "event",
+      event: { type: "session_updated", session: bootstrap.session },
+    });
+
+    expect(state.liveRun).toBeNull();
+    expect(state.completedRun?.tools[0].changedFile?.path).toBe("README.md");
   });
 
   it("drops the previous empty draft when a new session replaces it", () => {

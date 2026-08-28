@@ -71,6 +71,11 @@ export default function App() {
     if (session) dispatch({ type: "event", event: { type: "session_changed", session } });
   }
 
+  async function updateSessionMetadata(action: Promise<SessionSummary>) {
+    const session = await runRequest(action);
+    if (session) dispatch({ type: "event", event: { type: "session_metadata_updated", session } });
+  }
+
   async function chooseProject() {
     setProjectPicking(true);
     try {
@@ -83,6 +88,13 @@ export default function App() {
     } finally {
       setProjectPicking(false);
     }
+  }
+
+  async function selectRecentProject(path: string) {
+    const next = await refresh(api.selectProject(path));
+    if (!next) return;
+    setMode(next.config.prompt.agent_mode);
+    setTrustOpen(false);
   }
 
   const task = bootstrap.task;
@@ -98,6 +110,8 @@ export default function App() {
         onNew={() => void changeSession(api.newSession())}
         onSelect={(id) => void changeSession(api.switchSession(id))}
         onDelete={setPendingDelete}
+        onRename={(id, title) => void updateSessionMetadata(api.renameSession(id, title))}
+        onPin={(id, pinned) => void updateSessionMetadata(api.pinSession(id, pinned))}
       />
 
       <section className={`workspace ${task?.active ? "workspace-active" : ""}`}>
@@ -105,17 +119,35 @@ export default function App() {
           <div className="topbar-context">
             <span className="topbar-kicker">Session</span>
             <strong>{bootstrap.session?.title || "New session"}</strong>
-            <button
-              className="project-switch"
-              type="button"
-              title={bootstrap.cwd}
-              disabled={Boolean(task?.active) || projectPicking}
-              onClick={() => void chooseProject()}
-            >
-              <FolderIcon />
-              <span>{projectPicking ? "Selecting directory…" : shortPath(bootstrap.cwd)}</span>
-              <small>Change</small>
-            </button>
+            <div className="project-context">
+              <button
+                className="project-switch"
+                type="button"
+                title={bootstrap.cwd}
+                disabled={Boolean(task?.active) || projectPicking}
+                onClick={() => void chooseProject()}
+              >
+                <FolderIcon />
+                <span>{projectPicking ? "Selecting directory…" : shortPath(bootstrap.cwd)}</span>
+                <small>Change</small>
+              </button>
+              {(bootstrap.recent_projects ?? []).length > 1 ? (
+                <details className="recent-projects">
+                  <summary>Recent</summary>
+                  <div>
+                    {(bootstrap.recent_projects ?? []).filter((path) => path !== bootstrap.cwd).map((path) => (
+                      <button
+                        key={path}
+                        type="button"
+                        disabled={Boolean(task?.active)}
+                        title={path}
+                        onClick={() => void selectRecentProject(path)}
+                      >{shortPath(path)}</button>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </div>
           </div>
           <div className="topbar-actions">
             <span className={`connection ${state.connected ? "online" : ""}`}>
@@ -165,7 +197,12 @@ export default function App() {
           ) : null}
         </div>
 
-        <Conversation messages={messages} liveRun={state.liveRun} cwd={bootstrap.cwd} />
+        <Conversation
+          messages={messages}
+          liveRun={state.liveRun}
+          completedRun={state.completedRun}
+          cwd={bootstrap.cwd}
+        />
 
         <InteractionBar
           task={task}

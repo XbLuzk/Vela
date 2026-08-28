@@ -1,5 +1,7 @@
+import { useState } from "react";
+
 import type { SessionSummary } from "../types";
-import { PlusIcon, TrashIcon, VelaMark } from "./Icons";
+import { EditIcon, PinIcon, PlusIcon, TrashIcon, VelaMark } from "./Icons";
 
 interface SidebarProps {
   sessions: SessionSummary[];
@@ -8,9 +10,27 @@ interface SidebarProps {
   onNew: () => void;
   onSelect: (id: string) => void;
   onDelete: (session: SessionSummary) => void;
+  onRename: (id: string, title: string) => void;
+  onPin: (id: string, pinned: boolean) => void;
 }
 
-export function Sidebar({ sessions, activeId, disabled, onNew, onSelect, onDelete }: SidebarProps) {
+export function Sidebar({
+  sessions, activeId, disabled, onNew, onSelect, onDelete, onRename, onPin,
+}: SidebarProps) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+
+  function startRename(session: SessionSummary) {
+    setRenamingId(session.id);
+    setTitle(session.title || "New session");
+  }
+
+  function finishRename(session: SessionSummary) {
+    const nextTitle = title.trim();
+    setRenamingId(null);
+    if (nextTitle && nextTitle !== session.title) onRename(session.id, nextTitle);
+  }
+
   return (
     <aside className={`sidebar ${disabled ? "task-active" : ""}`}>
       <div className="brand">
@@ -30,25 +50,51 @@ export function Sidebar({ sessions, activeId, disabled, onNew, onSelect, onDelet
         <p className="sidebar-label"><span>Sessions</span><small>{sessions.length}</small></p>
         {sessions.map((session) => (
           <div className={`session-row ${session.id === activeId ? "active" : ""}`} key={session.id}>
-            <button
-              className="session-item"
-              type="button"
-              onClick={() => onSelect(session.id)}
-              disabled={disabled || session.id === activeId}
-            >
-              <span>{session.title || "New session"}</span>
-              <small>{formatRelativeTime(session.updated_at)}</small>
-            </button>
-            <button
-              className="session-delete"
-              type="button"
-              aria-label={`Delete session ${session.title || "New session"}`}
-              title="Delete session"
-              disabled={disabled}
-              onClick={() => onDelete(session)}
-            >
-              <TrashIcon />
-            </button>
+            <div className="session-item">
+              {renamingId === session.id ? (
+                <input
+                  className="session-rename"
+                  value={title}
+                  autoFocus
+                  aria-label="Session title"
+                  onChange={(event) => setTitle(event.target.value)}
+                  onBlur={() => finishRename(session)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                    if (event.key === "Escape") setRenamingId(null);
+                  }}
+                />
+              ) : (
+                <button
+                  className="session-select"
+                  type="button"
+                  onClick={() => onSelect(session.id)}
+                  disabled={disabled || session.id === activeId}
+                >
+                  <span>{session.pinned ? <PinIcon /> : null}{session.title || "New session"}</span>
+                  <small>{formatRelativeTime(session.updated_at)}</small>
+                </button>
+              )}
+            </div>
+            <div className="session-actions">
+              <button
+                className="session-action"
+                type="button"
+                aria-label={session.pinned ? "Unpin session" : "Pin session"}
+                title={session.pinned ? "Unpin session" : "Pin session"}
+                disabled={disabled}
+                onClick={() => onPin(session.id, !session.pinned)}
+              ><PinIcon /></button>
+              <button className="session-action" type="button" aria-label="Rename session" title="Rename session" disabled={disabled} onClick={() => startRename(session)}><EditIcon /></button>
+              <button
+                className="session-delete"
+                type="button"
+                aria-label={`Delete session ${session.title || "New session"}`}
+                title="Delete session"
+                disabled={disabled}
+                onClick={() => onDelete(session)}
+              ><TrashIcon /></button>
+            </div>
           </div>
         ))}
       </nav>

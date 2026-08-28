@@ -43,6 +43,14 @@ export function TrashIcon(props: IconProps) {
   );
 }
 
+export function PinIcon(props: IconProps) {
+  return <IconFrame {...props}><path d="m9 4 6 6m-7.5 1.5 5-5 4.5 4.5-5 5M12 16l-5 5" /></IconFrame>;
+}
+
+export function EditIcon(props: IconProps) {
+  return <IconFrame {...props}><path d="m4 20 4.3-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" /><path d="m13.8 7.2 3 3" /></IconFrame>;
+}
+
 export function FolderIcon(props: IconProps) {
   return (
     <IconFrame {...props}>

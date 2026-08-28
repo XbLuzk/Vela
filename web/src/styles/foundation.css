@@ -1,0 +1,68 @@
+:root {
+  color: #18211f;
+  background: #e8ede8;
+  font-family: "Avenir Next", Avenir, "Noto Sans SC", "PingFang SC", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --canvas: #e8ede8;
+  --paper: #f4f5f0;
+  --paper-strong: #fffdf7;
+  --ink: #18211f;
+  --muted: #68736f;
+  --faint: #929c97;
+  --line: #d2d8d2;
+  --line-strong: #bbc5be;
+  --accent: #e45f46;
+  --accent-bright: #f4775d;
+  --accent-soft: #f7ddd6;
+  --amber: #e45f46;
+  --teal: #173b38;
+  --purple: #6f5da3;
+  --danger: #ad403b;
+  --sidebar: #e3e8e3;
+  --sidebar-muted: #77827d;
+  --code: #e9eeea;
+  --shadow: 0 18px 48px rgb(17 48 43 / 10%);
+  --display-font: "Iowan Old Style", "Songti SC", "Noto Serif SC", serif;
+  --mono-font: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 14px;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+button, textarea, input, select { color: inherit; font: inherit; }
+button { cursor: pointer; transition: color 160ms ease, border-color 160ms ease, background 160ms ease, opacity 160ms ease, transform 160ms ease; }
+button:disabled { cursor: not-allowed; opacity: .48; }
+button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.boot-screen { display: grid; height: 100%; place-content: center; justify-items: center; color: var(--muted); background: var(--paper); }
+.boot-mark, .brand-mark { display: grid; place-items: center; color: white; }
+.boot-mark { width: 48px; height: 48px; margin-bottom: 16px; color: var(--teal); animation: boot-breathe 1.8s ease-in-out infinite; }
+.boot-mark svg { width: 40px; height: 40px; }
+.empty-context, .eyebrow, .interaction-kicker { color: var(--accent); font-size: var(--text-xs); font-weight: 650; letter-spacing: .02em; }
+
+.primary-button, .quiet-button, .danger-button { min-height: 34px; padding: 0 12px; border-radius: 999px; font-size: var(--text-sm); font-weight: 700; }
+.primary-button { border: 1px solid var(--accent); background: var(--accent); color: white; }
+.primary-button:hover:not(:disabled) { background: var(--accent-bright); }
+.quiet-button { border: 1px solid var(--line-strong); background: var(--paper-strong); }
+.danger-button { border: 1px solid var(--danger); background: var(--danger); color: white; }
+.icon-button { display: grid; width: 32px; height: 32px; padding: 0; place-items: center; border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--muted); }
+.icon-button svg { width: 17px; height: 17px; }
+.icon-button:hover:not(:disabled) { border-color: rgb(23 59 56 / 12%); background: rgb(255 255 255 / 60%); color: var(--ink); }
+
+@keyframes sidebar-enter { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes workspace-progress { 0%, 100% { opacity: .42; transform: scaleX(.28); } 50% { opacity: .9; transform: scaleX(1); } }
+@keyframes topbar-enter { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes content-enter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes composer-enter { from { opacity: 0; transform: translateY(16px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes message-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes dialog-enter { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes notice-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes route-travel { 0% { opacity: 0; transform: translateX(-10px); } 20%, 80% { opacity: 1; } 100% { opacity: 0; transform: translateX(54px); } }
+@keyframes route-pulse { 0%, 100% { box-shadow: 0 0 0 1px var(--amber), 0 0 0 3px rgb(223 162 76 / 8%); } 50% { box-shadow: 0 0 0 1px var(--amber), 0 0 0 7px rgb(223 162 76 / 13%); } }
+@keyframes state-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@keyframes boot-breathe { 0%, 100% { opacity: .72; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
+@keyframes approval-shift { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes approval-pulse { from { opacity: .42; } to { opacity: .9; } }

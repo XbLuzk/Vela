@@ -18,6 +18,7 @@ export type Action =
 export const initialState: AppState = {
   bootstrap: null,
   liveRun: null,
+  completedRun: null,
   connected: false,
 };
 
@@ -34,7 +35,7 @@ export function reducer(state: AppState, action: Action): AppState {
 function applyRuntimeEvent(state: AppState, event: RuntimeEvent): AppState {
   if (event.type === "connected") return { ...state, connected: true };
   if (event.type === "bootstrap") {
-    return { ...state, bootstrap: event.bootstrap as Bootstrap, liveRun: null };
+    return { ...state, bootstrap: event.bootstrap as Bootstrap, liveRun: null, completedRun: null };
   }
   if (!state.bootstrap) return state;
 
@@ -48,6 +49,7 @@ function applyRuntimeEvent(state: AppState, event: RuntimeEvent): AppState {
       ...state,
       bootstrap: { ...state.bootstrap, session: updatedSession },
       liveRun: newRun(String(event.run_id ?? "")),
+      completedRun: null,
     };
   }
 
@@ -68,8 +70,20 @@ function applyRuntimeEvent(state: AppState, event: RuntimeEvent): AppState {
     return {
       ...state,
       liveRun: null,
+      completedRun: event.type === "session_updated" && hasChangedFiles(state.liveRun)
+        ? state.liveRun
+        : null,
       bootstrap: { ...state.bootstrap, session, sessions },
     };
+  }
+
+  if (event.type === "session_metadata_updated") {
+    const session = event.session as SessionSummary;
+    const sessions = replaceSessionMetadata(state.bootstrap.sessions ?? [], session);
+    const current = state.bootstrap.session?.id === session.id
+      ? { ...state.bootstrap.session, ...session }
+      : state.bootstrap.session;
+    return { ...state, bootstrap: { ...state.bootstrap, session: current, sessions } };
   }
 
   const run = state.liveRun ?? newRun(String(event.run_id ?? ""));
@@ -91,7 +105,12 @@ function applyRuntimeEvent(state: AppState, event: RuntimeEvent): AppState {
     const id = String(event.tool_call_id ?? "");
     const tools = run.tools.map((tool) =>
       tool.id === id
-        ? { ...tool, result: String(event.result ?? ""), isError: Boolean(event.is_error) }
+        ? {
+            ...tool,
+            result: String(event.result ?? ""),
+            isError: Boolean(event.is_error),
+            changedFile: event.changed_file as ToolActivity["changedFile"],
+          }
         : tool,
     );
     return withRun(state, { ...run, tools });
@@ -146,20 +165,33 @@ function withRun(state: AppState, liveRun: LiveRun): AppState {
   return { ...state, liveRun };
 }
 
+function hasChangedFiles(run: LiveRun | null): run is LiveRun {
+  return Boolean(run?.tools.some((tool) => tool.changedFile));
+}
+
 function replaceSession(
   sessions: SessionSummary[],
   current: SessionSummary,
   previous?: SessionSummary,
 ): SessionSummary[] {
   const summary = { ...current, messages: undefined };
-  return [
+  return sortSessions([
     summary,
     ...sessions.filter(
       (session) =>
         session.id !== current.id &&
         !(previous?.message_count === 0 && session.id === previous.id),
     ),
-  ];
+  ]);
+}
+
+function replaceSessionMetadata(sessions: SessionSummary[], current: SessionSummary): SessionSummary[] {
+  return sortSessions(sessions.map((session) => session.id === current.id ? { ...session, ...current } : session));
+}
+
+function sortSessions(sessions: SessionSummary[]): SessionSummary[] {
+  return [...sessions].sort((left, right) => Number(right.pinned) - Number(left.pinned)
+    || right.updated_at.localeCompare(left.updated_at));
 }
 
 function updatePlanTask(

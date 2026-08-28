@@ -33,6 +33,15 @@ class TrustRequest(BaseModel):
     trusted: bool
 
 
+class SessionMetadataRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    pinned: bool | None = None
+
+
+class ProjectRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=10_000)
+
+
 class SettingsRequest(BaseModel):
     provider: str | None = None
     model: str | None = None
@@ -142,6 +151,19 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @app.patch("/api/sessions/{reference}")
+    async def update_session(reference: str, request: SessionMetadataRequest) -> dict[str, Any]:
+        if request.title is None and request.pinned is None:
+            raise HTTPException(status_code=422, detail="Provide a session title or pin state")
+        try:
+            if request.title is not None:
+                return await runtime_manager.rename_session(reference, request.title)
+            return await runtime_manager.pin_session(reference, bool(request.pinned))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.post("/api/project/pick")
     async def pick_project() -> dict[str, Any]:
         try:
@@ -152,6 +174,13 @@ def create_app(
         except (OSError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"selected": True, "bootstrap": snapshot}
+
+    @app.post("/api/project/select")
+    async def select_project(request: ProjectRequest) -> dict[str, Any]:
+        try:
+            return await runtime_manager.select_project(request.path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/trust")
     async def set_trust(request: TrustRequest) -> dict[str, Any]:

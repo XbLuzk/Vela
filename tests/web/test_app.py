@@ -72,6 +72,12 @@ class FakeManager:
     async def delete_session(self, reference: str):
         return {**self.snapshot(), "session": {"id": "session-2"}, "sessions": []}
 
+    async def rename_session(self, reference: str, title: str):
+        return {"id": reference, "title": title, "pinned": False}
+
+    async def pin_session(self, reference: str, pinned: bool):
+        return {"id": reference, "title": "Demo", "pinned": pinned}
+
     async def select_project(self, path: str):
         self.cwd = Path(path)
         return self.snapshot()
@@ -141,6 +147,13 @@ def test_web_api_updates_trust_settings_and_sessions():
         assert client.post("/api/sessions").json()["id"] == "session-2"
         assert client.post("/api/sessions/session-1").json()["id"] == "session-1"
         assert client.delete("/api/sessions/session-1").json()["session"]["id"] == "session-2"
+        assert (
+            client.patch("/api/sessions/session-1", json={"title": "Renamed"}).json()["title"]
+            == "Renamed"
+        )
+        assert (
+            client.patch("/api/sessions/session-1", json={"pinned": True}).json()["pinned"] is True
+        )
         assert client.post("/api/trust", json={"trusted": True}).status_code == 200
         response = client.put(
             "/api/settings",
@@ -198,6 +211,17 @@ def test_web_api_treats_cancelled_project_picker_as_no_change():
 
     assert response.json() == {"selected": False}
     assert manager.cwd == Path("/workspace")
+
+
+def test_web_api_selects_a_recent_project():
+    manager = FakeManager()
+    app = create_app("/workspace", manager=manager, initialize=False)
+
+    with TestClient(app) as client:
+        response = client.post("/api/project/select", json={"path": "/workspace/recent"})
+
+    assert response.status_code == 200
+    assert response.json()["cwd"] == "/workspace/recent"
 
 
 def test_web_api_rejects_cross_origin_mutations():

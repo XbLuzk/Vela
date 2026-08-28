@@ -161,6 +161,19 @@ def test_session_store_deletes_only_within_project_scope(tmp_path):
 
     assert store.delete(session.id, cwd=other_project) is False
     assert store.get(session.id, cwd=project) is not None
+
+
+def test_session_store_renames_and_pins_within_its_project_scope(tmp_path):
+    store = SessionStore(tmp_path / "sessions.db")
+    project = tmp_path / "project"
+    session = store.create(project)
+
+    renamed = store.rename(session.id, "Ship the workspace", cwd=project)
+    pinned = store.pin(session.id, True, cwd=project)
+
+    assert renamed.title == "Ship the workspace"
+    assert pinned.pinned is True
+    assert store.list(project)[0].id == session.id
     assert store.delete(session.id, cwd=project) is True
     assert store.get(session.id) is None
 

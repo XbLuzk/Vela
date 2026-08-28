@@ -14,6 +14,7 @@ export interface SessionSummary {
   created_at: string;
   updated_at: string;
   message_count: number;
+  pinned: boolean;
   messages?: Message[];
 }
 
@@ -70,6 +71,7 @@ export interface Bootstrap {
   task?: TaskSnapshot;
   session?: SessionSummary;
   sessions?: SessionSummary[];
+  recent_projects?: string[];
   tool_count?: number;
 }
 
@@ -79,6 +81,7 @@ export interface ToolActivity {
   input?: Record<string, unknown>;
   result?: string;
   isError?: boolean;
+  changedFile?: { path: string; diff: string; truncated: boolean };
 }
 
 export interface PlanTaskActivity {
@@ -100,6 +103,7 @@ export interface LiveRun {
 export interface AppState {
   bootstrap: Bootstrap | null;
   liveRun: LiveRun | null;
+  completedRun: LiveRun | null;
   connected: boolean;
 }
 

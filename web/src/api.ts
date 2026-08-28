@@ -38,10 +38,20 @@ export const api = {
     request<SessionSummary>(`/api/sessions/${encodeURIComponent(id)}`, { method: "POST" }),
   deleteSession: (id: string) =>
     request<Bootstrap>(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  renameSession: (id: string, title: string) =>
+    request<SessionSummary>(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: "PATCH", body: JSON.stringify({ title }),
+    }),
+  pinSession: (id: string, pinned: boolean) =>
+    request<SessionSummary>(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: "PATCH", body: JSON.stringify({ pinned }),
+    }),
   pickProject: () =>
     request<{ selected: boolean; bootstrap?: Bootstrap }>("/api/project/pick", {
       method: "POST",
     }),
+  selectProject: (path: string) =>
+    request<Bootstrap>("/api/project/select", { method: "POST", body: JSON.stringify({ path }) }),
   trust: (trusted: boolean) =>
     request<Bootstrap>("/api/trust", {
       method: "POST",

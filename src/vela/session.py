@@ -37,6 +37,7 @@ class SessionRecord:
     updated_at: str
     title: str
     message_count: int
+    pinned: bool = False
     messages: list[Message] = field(default_factory=list)
 
 
@@ -173,6 +174,28 @@ class ActiveSession:
                 self.warning = f"Session deleted, but storage became unavailable: {exc}"
         return record, self.current
 
+    def rename(self, title: str) -> SessionRecord:
+        """Give the current conversation a user-defined title."""
+        if self.store is None:
+            self.current = _renamed_record(self.current, title)
+            return self.current
+        try:
+            self.current = self.store.rename(self.current.id, title, cwd=self.current.cwd)
+        except Exception as exc:  # noqa: BLE001 - keep the current conversation usable
+            self.warning = f"Could not rename session: {exc}"
+        return self.current
+
+    def pin(self, pinned: bool) -> SessionRecord:
+        """Keep the current conversation at the top of its workspace history."""
+        if self.store is None:
+            self.current = _pinned_record(self.current, pinned)
+            return self.current
+        try:
+            self.current = self.store.pin(self.current.id, pinned, cwd=self.current.cwd)
+        except Exception as exc:  # noqa: BLE001 - keep the current conversation usable
+            self.warning = f"Could not pin session: {exc}"
+        return self.current
+
     def close(self) -> None:
         if self.store is None:
             return
@@ -249,8 +272,15 @@ class SessionStore:
             updated_at=now,
             title=session_title,
             message_count=len(messages),
+            pinned=existing.pinned,
             messages=list(messages),
         )
+
+    def rename(self, session_id: str, title: str, *, cwd: str | Path) -> SessionRecord:
+        return self._update_metadata(session_id, cwd=cwd, title=_clean_title(title))
+
+    def pin(self, session_id: str, pinned: bool, *, cwd: str | Path) -> SessionRecord:
+        return self._update_metadata(session_id, cwd=cwd, pinned=pinned)
 
     def get(self, session_id: str, *, cwd: str | Path | None = None) -> SessionRecord | None:
         parameters: list[Any] = [session_id]
@@ -261,7 +291,7 @@ class SessionStore:
         with self._connect() as connection:
             row = connection.execute(
                 f"""
-                select id, cwd, created_at, updated_at, title, message_count, messages_json
+                select id, cwd, created_at, updated_at, title, message_count, pinned, messages_json
                 from sessions
                 where id = ?{scope_filter}
                 """,
@@ -273,10 +303,10 @@ class SessionStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                select id, cwd, created_at, updated_at, title, message_count
+                select id, cwd, created_at, updated_at, title, message_count, pinned
                 from sessions
                 where cwd = ?
-                order by updated_at desc, created_at desc
+                order by pinned desc, updated_at desc, created_at desc
                 limit ?
                 """,
                 (_scope(cwd), max(1, limit)),
@@ -335,10 +365,19 @@ class SessionStore:
                     updated_at text not null,
                     title text not null,
                     message_count integer not null,
+                    pinned integer not null default 0,
                     messages_json text not null
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("pragma table_info(sessions)").fetchall()
+            }
+            if "pinned" not in columns:
+                connection.execute(
+                    "alter table sessions add column pinned integer not null default 0"
+                )
             connection.execute(
                 """
                 create index if not exists idx_sessions_cwd_updated
@@ -357,12 +396,45 @@ class SessionStore:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                select id, cwd, created_at, updated_at, title, message_count
+                select id, cwd, created_at, updated_at, title, message_count, pinned
                 from sessions where id = ?
                 """,
                 (session_id,),
             ).fetchone()
         return _metadata_record(row) if row else None
+
+    def _update_metadata(
+        self,
+        session_id: str,
+        *,
+        cwd: str | Path,
+        title: str | None = None,
+        pinned: bool | None = None,
+    ) -> SessionRecord:
+        existing = self.get(session_id, cwd=cwd)
+        if existing is None:
+            raise KeyError(f"Unknown session: {session_id}")
+        now = datetime.now(UTC).isoformat()
+        next_title = title if title is not None else existing.title
+        next_pinned = existing.pinned if pinned is None else pinned
+        with self._connect() as connection:
+            connection.execute(
+                """
+                update sessions set title = ?, pinned = ?, updated_at = ?
+                where id = ? and cwd = ?
+                """,
+                (next_title, int(next_pinned), now, session_id, _scope(cwd)),
+            )
+        return SessionRecord(
+            id=existing.id,
+            cwd=existing.cwd,
+            created_at=existing.created_at,
+            updated_at=now,
+            title=next_title,
+            message_count=existing.message_count,
+            pinned=next_pinned,
+            messages=existing.messages,
+        )
 
     def _secure_storage(self) -> None:
         for path in (
@@ -390,6 +462,7 @@ def _metadata_record(row: sqlite3.Row) -> SessionRecord:
         updated_at=str(row["updated_at"]),
         title=str(row["title"]),
         message_count=int(row["message_count"]),
+        pinned=bool(row["pinned"]),
     )
 
 
@@ -462,5 +535,32 @@ def _updated_record(
         updated_at=datetime.now(UTC).isoformat(),
         title=session_title,
         message_count=len(messages),
+        pinned=record.pinned,
         messages=list(messages),
+    )
+
+
+def _renamed_record(record: SessionRecord, title: str) -> SessionRecord:
+    return SessionRecord(
+        id=record.id,
+        cwd=record.cwd,
+        created_at=record.created_at,
+        updated_at=datetime.now(UTC).isoformat(),
+        title=_clean_title(title),
+        message_count=record.message_count,
+        pinned=record.pinned,
+        messages=record.messages,
+    )
+
+
+def _pinned_record(record: SessionRecord, pinned: bool) -> SessionRecord:
+    return SessionRecord(
+        id=record.id,
+        cwd=record.cwd,
+        created_at=record.created_at,
+        updated_at=datetime.now(UTC).isoformat(),
+        title=record.title,
+        message_count=record.message_count,
+        pinned=pinned,
+        messages=record.messages,
     )
